@@ -107,6 +107,12 @@ data Tags
   | -- | The `ShortVectors` tag ensures that long vectors are printed out concisely.
     ShortVectors Tags
 
+type VerboseTags = 'Unnamed ('ShortVectors ('As 'Internal))
+
+type ExternalTags = 'Named ('ShortVectors ('As 'External))
+
+type FriendlyTags = 'Named ('Cleaned ('As 'External))
+
 --------------------------------------------------------------------------------
 -- Strategies
 
@@ -126,41 +132,6 @@ data Strategy
   | Branch Strategy Strategy
   | Branch3 Strategy Strategy Strategy
   | Pretty
-
-{-
--- Testing code, do not delete!
--- Fill in `TestType` and inspect the hole to see what it reduces to.
-type TestType = LinearExpression `In` NamedBoundCtx
-
-data MyProxy (a :: Strategy) = MyProxy
-test :: MyProxy (StrategyFor FriendlyTags TestType)
-test = _
--}
-
--- A type-class for printing out strategies to type-level strings
-type family ShowStrategy (s :: Strategy) :: Symbol where
-  ShowStrategy ('SetupContext s) = AppendSymbol "SetupContext → " (ShowStrategy s)
-  ShowStrategy ('AlterContext s) = AppendSymbol "AlterContext → " (ShowStrategy s)
-  ShowStrategy ('DescopeNaively s) = AppendSymbol "DescopeNaively → " (ShowStrategy s)
-  ShowStrategy ('DescopeWithNames s) = AppendSymbol "DescopeWithNames → " (ShowStrategy s)
-  ShowStrategy ('Functor s) = AppendSymbol "Functor → " (ShowStrategy s)
-  ShowStrategy ('PrintAs lang) = "PrintAs"
-  ShowStrategy ('QuoteValue s) = AppendSymbol "QuoteValue → " (ShowStrategy s)
-  ShowStrategy ('Clean s) = AppendSymbol "Clean → " (ShowStrategy s)
-  ShowStrategy ('ShortenVectors s) = AppendSymbol "ShortenVectors → " (ShowStrategy s)
-  ShowStrategy ('Branch s1 s2) =
-    AppendSymbol
-      "Branch("
-      ( AppendSymbol
-          (ShowStrategy s1)
-          (AppendSymbol ") (" (AppendSymbol (ShowStrategy s2) ")"))
-      )
-  ShowStrategy 'Pretty = "Pretty"
-
--- | A type family you can attach to the instances below to get
--- a trace of instance resolution printed out.
-type family Debug (strat :: Strategy) (msg :: Symbol) :: GHC.Constraint where
-  Debug strat msg = TypeError ('Text "Debug: " ':<>: 'Text (ShowStrategy strat) ':<>: 'Text msg)
 
 -- | This type family computes the correct printing strategy given the tags
 -- and the type of the expression.
@@ -331,30 +302,61 @@ type family BoundsErrorFunction tags (a :: k) :: ErrorMessage where
       ':$$: 'Text "Use the `BoundedValue` type to wrap the bounds objects."
 
 --------------------------------------------------------------------------------
+-- Debugging strategies
+
+-- A type-class for printing out strategies to type-level strings
+type family ShowStrategy (s :: Strategy) :: Symbol where
+  ShowStrategy ('SetupContext s) = AppendSymbol "SetupContext → " (ShowStrategy s)
+  ShowStrategy ('AlterContext s) = AppendSymbol "AlterContext → " (ShowStrategy s)
+  ShowStrategy ('DescopeNaively s) = AppendSymbol "DescopeNaively → " (ShowStrategy s)
+  ShowStrategy ('DescopeWithNames s) = AppendSymbol "DescopeWithNames → " (ShowStrategy s)
+  ShowStrategy ('Functor s) = AppendSymbol "Functor → " (ShowStrategy s)
+  ShowStrategy ('PrintAs lang) = "PrintAs"
+  ShowStrategy ('QuoteValue s) = AppendSymbol "QuoteValue → " (ShowStrategy s)
+  ShowStrategy ('Clean s) = AppendSymbol "Clean → " (ShowStrategy s)
+  ShowStrategy ('ShortenVectors s) = AppendSymbol "ShortenVectors → " (ShowStrategy s)
+  ShowStrategy ('Branch s1 s2) =
+    AppendSymbol
+      "Branch("
+      ( AppendSymbol
+          (ShowStrategy s1)
+          (AppendSymbol ") (" (AppendSymbol (ShowStrategy s2) ")"))
+      )
+  ShowStrategy 'Pretty = "Pretty"
+
+-- | A type family you can attach to the instances below to get
+-- a trace of instance resolution printed out.
+type family Debug (strat :: Strategy) (msg :: Symbol) :: GHC.Constraint where
+  Debug strat msg = TypeError ('Text "Debug: " ':<>: 'Text (ShowStrategy strat) ':<>: 'Text msg)
+
+{-
+-- Testing code, do not delete!
+-- Fill in `TestType` and inspect the hole to see what it reduces to.
+type TestType = LinearExpression `In` NamedBoundCtx
+
+data MyProxy (a :: Strategy) = MyProxy
+test :: MyProxy (StrategyFor FriendlyTags TestType)
+test = _
+-}
+--------------------------------------------------------------------------------
 -- Executing printing strategies
 --------------------------------------------------------------------------------
-
--- | A type synonym that takes the tags and the type and computes the strategy
--- for the combination to guide type-class resolution.
-type PrettyWith tags a = PrettyUsing (StrategyFor tags a) a
-
-type VerboseTags = 'Unnamed ('ShortVectors ('As 'Internal))
-
-type ExternalTags = 'Named ('ShortVectors ('As 'External))
-
-type FriendlyTags = 'Named ('Cleaned ('As 'External))
-
-type PrettyVerbose a = PrettyWith VerboseTags (a `In` NoCtx)
-
-type PrettyExternal a = PrettyWith ExternalTags a
-
-type PrettyFriendly a = PrettyWith FriendlyTags a
 
 class PrettyUsing (strategy :: Strategy) a where
   prettyUsing :: a -> Doc b
 
 prettyWith :: forall tags a b. (PrettyWith tags a) => a -> Doc b
 prettyWith = prettyUsing @(StrategyFor tags a) @a @b
+
+-- | A type synonym that takes the tags and the type and computes the strategy
+-- for the combination to guide type-class resolution.
+type PrettyWith tags a = PrettyUsing (StrategyFor tags a) a
+
+type PrettyVerbose a = PrettyWith VerboseTags (a `In` NoCtx)
+
+type PrettyExternal a = PrettyWith ExternalTags a
+
+type PrettyFriendly a = PrettyWith FriendlyTags a
 
 --------------------------------------------------------------------------------
 -- SetupContext

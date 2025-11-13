@@ -12,6 +12,20 @@
   `vehicle compile queries` mode has a `--format` option to replace the old `--target option`.
   This command is only used internally and therefore this is not considered a breaking change.
 
+### Language
+
+* Constants such as `0` and `0.0` are now automatically coercable to tensors of arbitrary dimensions.
+  For example, whereas before you had to write:
+  ```
+  validImage : Tensor Real [28,28] -> Bool
+  validImage x = forall i j . 0 <= x ! i ! j <= 1
+  ```
+  you can now write:
+  ```
+  validImage : Tensor Real [28,28] -> Bool
+  validImage x = 0 <= x <= 1
+  ```
+
 ### Verifier backend
 
 * Missing bounds on network inputs is now a hard error rather than a warning.

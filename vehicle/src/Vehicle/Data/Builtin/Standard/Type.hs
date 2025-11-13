@@ -142,9 +142,6 @@ typeOfFromVectorToList =
 typeOfNatInDomainConstraint :: (HasStandardBuiltins builtin) => DSLExpr builtin
 typeOfNatInDomainConstraint = forAll "A" type0 $ \t -> tNat ~> t ~> type0
 
-natInDomainConstraint :: DSLExpr Builtin -> DSLExpr Builtin -> DSLExpr Builtin
-natInDomainConstraint n t = builtin NatInDomainConstraint @@ [n, t]
-
 typeOfFromNat :: DSLExpr Builtin -> DSLExpr Builtin
 typeOfFromNat t = forAllExpl "n" tNat $ \n -> natInDomainConstraint n t .~~~> t
 

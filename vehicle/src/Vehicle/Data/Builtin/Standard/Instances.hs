@@ -184,15 +184,18 @@ allInstances =
               forAllDims $ \ds ->
                 validTensorLikeType (tTensor t ds),
             lamType $ \_t ->
-              lamDim $ \_ds ->
+              lamDims $ \_ds ->
                 tUnit,
             False
           ),
-          -- ----------------
+          ----------------
           -- HasRatLits --
           ----------------
-          ( hasRatLits (tRatTensor dimNil),
-            builtinCast (FromRat FromRatToRat),
+          ( forAllDims $ \ds ->
+              hasRatLits (tRatTensor ds),
+            lamDims $ \ds ->
+              explLam "v" (tRatTensor dimNil) $ \value ->
+                constTensor tRat (builtinCast (FromRat FromRatToRat) @@ [value]) ds,
             False
           ),
           ----------------
@@ -208,8 +211,12 @@ allInstances =
             builtinCast (FromNat FromNatToNat),
             True
           ),
-          ( hasNatLits (tRatTensor dimNil),
-            builtinCast (FromNat FromNatToRat),
+          ( forAllDims $ \ds ->
+              hasNatLits (tRatTensor ds),
+            lamDims $ \ds ->
+              explLam "v" tNat $ \value ->
+                lam "c" (Instance True) Irrelevant (natInDomainConstraint value (tRatTensor ds)) $ \inDomain ->
+                  constTensor tRat (builtinCast (FromNat FromNatToRat) @@ [value] .@@@@ [inDomain]) ds,
             False
           ),
           ----------------

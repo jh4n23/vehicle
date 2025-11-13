@@ -3,6 +3,7 @@
 module Vehicle.Data.Builtin.Standard.Core
   ( module Syntax,
     builtinCast,
+    natInDomainConstraint,
     accessFromNatToIndex,
     accessFromNatToRat,
     accessFromVectorToList,
@@ -313,6 +314,9 @@ instance PrintableBuiltin Builtin where
 
 builtinCast :: BuiltinCast -> DSLExpr Builtin
 builtinCast = builtin . BuiltinCast
+
+natInDomainConstraint :: DSLExpr Builtin -> DSLExpr Builtin -> DSLExpr Builtin
+natInDomainConstraint n t = builtin NatInDomainConstraint @@ [n, t]
 
 accessFromNatToIndex ::
   (HasBuiltinConstructor expr) =>
