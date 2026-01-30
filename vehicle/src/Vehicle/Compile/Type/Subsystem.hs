@@ -31,7 +31,7 @@ import Vehicle.Data.Builtin.Decidability (DecidabilityBuiltin (..))
 import Vehicle.Data.Builtin.Decidability.Instances (decidabilityBuiltinInstances)
 import Vehicle.Data.Builtin.Decidability.Type ()
 import Vehicle.Data.Builtin.Interface (BuiltinHasListLiterals)
-import Vehicle.Data.Builtin.Interface.Normalise (NormalisableBuiltin (..))
+import Vehicle.Data.Builtin.Interface.Normalise (BuiltinEvaluationScheme (..), NormalisableBuiltin (..))
 import Vehicle.Data.Builtin.Interface.Print
 import Vehicle.Data.Builtin.Linearity (LinearityBuiltin)
 import Vehicle.Data.Builtin.Linearity.Type ()
@@ -147,17 +147,17 @@ resolveInstanceArgumentsAndCasts prog =
     return prog'
   where
     removeBuiltinInstances :: BuiltinUpdate m builtin builtin
-    removeBuiltinInstances p b args
-      | isTypeClassOp b = do
-          (inst, remainingArgs) <- findInstanceArg b args
-          -- Replace the provenance of the final solution with the provenance of where the
-          -- constraint was generated. This is needed to get the information to propagate
-          -- properly for the polarity and linearity types, otherwise the provenance ends
-          -- up empty as the candidates are constructed independently.
-          let newInst = replaceProvenance p inst
-          let result = substArgs newInst remainingArgs
-          return result
-      | otherwise = return $ normAppList (Builtin p b) args
+    removeBuiltinInstances p b args = case evaluationScheme b of
+      TypeClassEval -> do
+        (inst, remainingArgs) <- findInstanceArg b args
+        -- Replace the provenance of the final solution with the provenance of where the
+        -- constraint was generated. This is needed to get the information to propagate
+        -- properly for the polarity and linearity types, otherwise the provenance ends
+        -- up empty as the candidates are constructed independently.
+        let newInst = replaceProvenance p inst
+        let result = substArgs newInst remainingArgs
+        return result
+      _ -> return $ normAppList (Builtin p b) args
 
     removeExternalInstances :: FreeVarUpdate m builtin
     removeExternalInstances recGo p ident args

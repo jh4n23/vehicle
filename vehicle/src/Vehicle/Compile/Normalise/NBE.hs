@@ -23,13 +23,11 @@ import Data.Map.Ordered.Strict qualified as OMap
 import GHC.Stack (HasCallStack)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
-import Vehicle.Data.Builtin.Interface (Accessor (..))
 import Vehicle.Data.Builtin.Interface.Normalise
-  ( EvalScheme (..),
+  ( BuiltinEvaluationScheme (..),
     NormalisableBuiltin (..),
   )
 import Vehicle.Data.Builtin.Interface.Print
-import Vehicle.Data.Code.Interface (IsArgs (..))
 import Vehicle.Data.Code.Value
 import Vehicle.Data.Variable.Bound.Context.Generic
 import Vehicle.Data.Variable.Bound.Context.Name.Class (MonadReadableNameContext (getNameContext))
@@ -118,7 +116,7 @@ normaliseClosure binder closure = do
 
 type MonadNorm builtin m =
   ( MonadLogger m,
-    NormalisableBuiltin builtin,
+    NormalisableBuiltin Value builtin,
     PrintableBuiltin builtin
   )
 
@@ -244,18 +242,22 @@ evalBuiltin ::
   builtin ->
   Spine builtin ->
   m (Value builtin)
-evalBuiltin ctx b spine
-  | not (isTypeClassOp b) = case evalScheme b of
-      Simple evalFn -> maybe (return $ VBuiltin b spine) evalFn (getExpr accessSpine spine)
-      NonSimple evalFn -> maybe (return $ VBuiltin b spine) (evalFn ctx evalApp eval) (getExpr accessSpine spine)
-      Derived ident -> do
-        value <- lookupIdentValue ident
-        evalApp ctx value spine
-      None -> return $ VBuiltin b spine
-  | otherwise = do
-      (inst, remainingArgs) <- findInstanceArg b spine
-      evalApp ctx inst remainingArgs
+evalBuiltin ctx b spine = _
 
+{-
+case evaluationScheme b spine of
+  Simple result -> result
+  NonSimple evalFn -> evalFn ctx evalApp eval
+  Derived ident -> do
+    value <- lookupIdentValue ident
+    evalApp ctx value spine
+  TypeClassEval -> do
+    (inst, remainingArgs) <- findInstanceArg b spine
+    evalApp ctx inst remainingArgs
+  Blocked {} -> return $ VBuiltin b spine
+  InsufficientArgs {} -> return $ VBuiltin b spine
+  Unevaluable -> return $ VBuiltin b spine
+-}
 lookupIdentValue :: forall builtin m. (MonadFreeContext builtin m) => Identifier -> m (Value builtin)
 lookupIdentValue ident = do
   decl <- getDeclEntry (Proxy @builtin) ident

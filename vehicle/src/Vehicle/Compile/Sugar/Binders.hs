@@ -1,7 +1,6 @@
-{-# LANGUAGE ViewPatterns #-}
-
 module Vehicle.Compile.Sugar.Binders
   ( HasBasicBinders (..),
+    HasLetBinders (..),
     HasBuiltinBinders (..),
     foldPiBinders,
     foldLamBinders,
@@ -27,6 +26,8 @@ import Vehicle.Data.Builtin.Core
 class HasBasicBinders expr where
   getPiBinder :: expr -> Maybe (GenericBinder expr, expr)
   getLamBinder :: expr -> Maybe (GenericBinder expr, expr)
+
+class HasLetBinders expr where
   getLetBinder :: expr -> Maybe (expr, GenericBinder expr, expr)
 
 class HasBuiltinBinders expr where
@@ -111,7 +112,7 @@ foldBinders getBinder leadBinder = go
 type LetBinder expr = (GenericBinder expr, expr)
 
 -- | Collapses consecutative let expressions into a list of let declarations
-foldLetBinders :: (HasBasicBinders expr) => expr -> ([LetBinder expr], expr)
+foldLetBinders :: (HasLetBinders expr) => expr -> ([LetBinder expr], expr)
 foldLetBinders expr = case getLetBinder expr of
   Just (bound, binder, body)
     | wantsToFold binder -> first ((binder, bound) :) (foldLetBinders body)

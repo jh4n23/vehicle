@@ -5,6 +5,7 @@ module Vehicle.Data.AST.Expr.Scoped
     Type,
     Binder,
     Arg,
+    Args,
     Telescope,
     RecordField,
     RecordFields,
@@ -46,7 +47,7 @@ import Data.Serialize (Serialize)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import GHC.Generics (Generic)
-import Vehicle.Compile.Sugar.Binders (HasBasicBinders (..), HasBuiltinBinders (..))
+import Vehicle.Compile.Sugar.Binders (HasBasicBinders (..), HasBuiltinBinders (..), HasLetBinders (..))
 import Vehicle.Data.Builtin.Interface
 import Vehicle.Data.Code.Interface (HasBuiltinConstructor (..))
 import Vehicle.Data.Universe (UniverseLevel (..))
@@ -156,6 +157,8 @@ type Type builtin = Expr builtin
 type Binder builtin = GenericBinder (Expr builtin)
 
 type Arg builtin = GenericArg (Expr builtin)
+
+type Args builtin = [Arg builtin]
 
 type Telescope builtin = GenericTelescope (Expr builtin)
 
@@ -361,6 +364,7 @@ instance HasBasicBinders (Expr builtin) where
     Lam _ binder body -> Just (binder, body)
     _ -> Nothing
 
+instance HasLetBinders (Expr builtin) where
   getLetBinder = \case
     Let _ value binder body -> Just (value, binder, body)
     _ -> Nothing

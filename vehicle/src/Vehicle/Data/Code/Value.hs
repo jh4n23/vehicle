@@ -11,7 +11,6 @@ module Vehicle.Data.Code.Value
     VProg,
     VDims,
     Spine,
-    getNMeta,
     BoundEnv (..),
     lookupIxInEnv,
     extendEnvWithBound,
@@ -26,6 +25,10 @@ module Vehicle.Data.Code.Value
     emptyBoundEnv,
     GluedExpr (..),
     GluedType,
+<<<<<<< HEAD
+=======
+    envEntryToValue,
+>>>>>>> 25e24772 (Progress?)
     DimensionedTensorValue (..),
   )
 where
@@ -34,7 +37,6 @@ import Control.Monad (void)
 import Data.Bifunctor (Bifunctor (..))
 import Data.Foldable (traverse_)
 import Data.Map (Map)
-import Data.Map.Ordered (OMap)
 import Data.Maybe (fromMaybe)
 import GHC.Generics
 import Vehicle.Data.AST.Expr.Scoped (Expr)
@@ -58,9 +60,14 @@ data Closure builtin = Closure (BoundEnv builtin) (Expr builtin)
 -----------------------------------------------------------------------------
 -- Normalised expressions
 
+data Value builtin
+  = Forced (ForcedValue builtin)
+  | Unforced (Closure builtin)
+  deriving (Show, Generic, Eq, Ord)
+
 -- | A normalised expression. Internal invariant is that it should always be
 -- well-typed.
-data Value builtin
+data ForcedValue builtin
   = VUniverse !UniverseLevel
   | VMeta !MetaID !(Spine builtin)
   | VFreeVar !Identifier !(Spine builtin)
@@ -80,7 +87,7 @@ type VBinder builtin = GenericBinder (Value builtin)
 
 type VTelescope builtin = GenericTelescope (Value builtin)
 
-type VRecordFields builtin = OMap FieldName (Value builtin)
+type VRecordFields builtin = SearchableRecordFields (Value builtin)
 
 type VDecl builtin = GenericDecl (Value builtin)
 
@@ -167,13 +174,6 @@ traverseEnv_ f (BoundEnv env) = traverse_ (\(_, v) -> f v) env
 
 traverseEnv :: (Monad m) => (Value builtin -> m (Value builtin)) -> BoundEnv builtin -> m (BoundEnv builtin)
 traverseEnv f (BoundEnv env) = BoundEnv <$> traverse (\(u, v) -> (u,) <$> f v) env
-
------------------------------------------------------------------------------
--- Patterns
-
-getNMeta :: Value builtin -> Maybe MetaID
-getNMeta (VMeta m _) = Just m
-getNMeta _ = Nothing
 
 -----------------------------------------------------------------------------
 -- Glued expressions

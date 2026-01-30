@@ -7,7 +7,6 @@ import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Compile.Type.Constraint.Core (instantiateInstanceConstraintSolution)
 import Vehicle.Compile.Type.Core
-import Vehicle.Compile.Type.Meta (MetaSet)
 import Vehicle.Compile.Type.Meta.Set qualified as MetaSet
 import Vehicle.Compile.Type.Monad
 import Vehicle.Compile.Type.Monad.Class
@@ -88,7 +87,7 @@ monomorphisationError b args = do
 -- Auxiliary constraint progress
 
 data AuxiliaryConstraintProgress builtin
-  = Stuck MetaSet
+  = Stuck BlockingMetas
   | Progress [WithContext (UnificationConstraint builtin)] [WithContext (InstanceConstraint builtin)]
   deriving (Show)
 

@@ -14,20 +14,17 @@ import Data.Data (Proxy (..))
 import Data.List.NonEmpty qualified as NonEmpty (toList)
 import Data.Maybe (fromMaybe)
 import Vehicle.Compile.Error
-import Vehicle.Compile.Normalise.NBE (eval)
-import Vehicle.Compile.Normalise.Quote (Quote (..))
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
 import Vehicle.Compile.Type.Constraint.UnificationSolver (solveUnificationConstraint)
 import Vehicle.Compile.Type.Core
-import Vehicle.Compile.Type.Force (forceHead)
+import Vehicle.Compile.Type.Force (forceHead, unforce)
 import Vehicle.Compile.Type.Meta (MetaSet)
 import Vehicle.Compile.Type.Meta.Set qualified as MetaSet
 import Vehicle.Compile.Type.Monad
 import Vehicle.Compile.Type.Monad.Class (createFreshConstraintCtx, getDeclType, getRecordDefinition)
 import Vehicle.Compile.Type.System (HasTypeSystem (..), TCM)
 import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin (..))
-import Vehicle.Data.Code.Value
 import Vehicle.Data.Universe (UniverseLevel (..))
 import Vehicle.Data.Variable.Bound.Context.Generic
 import Vehicle.Data.Variable.Bound.Context.Name (MonadReadableNameContext (..))
@@ -402,12 +399,8 @@ createFreshUnificationConstraint ::
   Type builtin ->
   m ()
 createFreshUnificationConstraint p ctx origin expectedType actualType = do
-  let env = boundContextToEnv ctx
-  let nameCtx = toNamedBoundCtx ctx
-  normExpectedType <- eval nameCtx env expectedType
-  normActualType <- eval nameCtx env actualType
   context <- createFreshConstraintCtx p ctx
-  let unification = Unify origin normExpectedType normActualType
+  let unification = Unify origin expectedType actualType
   solveUnificationConstraint (WithContext unification context)
 
 getCurrentRelevance :: (MonadBidirectional builtin m) => Proxy builtin -> m Relevance
@@ -459,9 +452,8 @@ forceApplicationHeadType ::
   Type builtin ->
   m (Type builtin, MetaSet)
 forceApplicationHeadType ctx typ = do
-  normType <- eval (toNamedBoundCtx ctx) (boundContextToEnv ctx) typ
-  (forcedType, blockingMetas) <- forceHead (toNamedBoundCtx ctx) normType
-  return (quote (provenanceOf typ) (boundCtxLv ctx) forcedType, blockingMetas)
+  (forcedType, blockingMetas) <- forceHead (toNamedBoundCtx ctx) typ
+  return (unforce forcedType, blockingMetas)
 
 checkArgsAgainstPiType ::
   (TCM builtin m) =>

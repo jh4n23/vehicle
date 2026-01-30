@@ -4,22 +4,23 @@ module Vehicle.Compile.Type.Constraint.InstanceSolver
   )
 where
 
+import Control.Monad (zipWithM)
 import Control.Monad.Except (MonadError (..))
 import Data.Either (partitionEithers)
 import Data.Proxy (Proxy (..))
 import Vehicle.Compile.Error
-import Vehicle.Compile.Normalise.NBE (eval)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyExternal)
 import Vehicle.Compile.Print.Error (formatCompileError)
 import Vehicle.Compile.Type.Constraint.Core
 import Vehicle.Compile.Type.Constraint.UnificationSolver (runUnificationSolver)
 import Vehicle.Compile.Type.Core
+import Vehicle.Compile.Type.Force (ForcedExpr (..), forceHead)
 import Vehicle.Compile.Type.Monad
 import Vehicle.Compile.Type.Monad.Class
 import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin)
-import Vehicle.Data.Code.Value
 import Vehicle.Data.Variable.Bound.Context.Generic
+import Vehicle.Data.Variable.Bound.Context.Name.Core (NamedBoundCtx)
 import Vehicle.Data.Variable.Bound.Level (dbLevelToIndex)
 import Vehicle.Data.Variable.Free.Context (MonadFreeContext (..))
 
@@ -112,7 +113,8 @@ solveInstanceGoal constraint (candidates, failedCandidates) depth goal = do
           <> lineIndent (vsep $ fmap (prettyExternal . successfulCandidate) successfulCandidates)
 
       -- Find most general candiate
-      case findLeastGeneralCandidate successfulCandidates of
+      maybeLeastGeneralCanddiate <- findLeastGeneralCandidate (namedBoundCtxOf $ contextOf constraint) successfulCandidates
+      case maybeLeastGeneralCanddiate of
         Just SuccessfulInstanceCandidate {..} -> do
           logDebug MaxDetail $ "Accepting least general candidate:" <+> squotes (prettyExternal successfulCandidate)
           adoptHypotheticalState successfulState
@@ -200,7 +202,7 @@ getCandidatesInBoundCtx goal ctx = go ctx
 data SuccessfulInstanceCandidate builtin = SuccessfulInstanceCandidate
   { successfulCandidate :: WithContext (InstanceCandidate builtin),
     successfulState :: TypeCheckerState builtin,
-    successfulSolution :: Value builtin
+    successfulSolution :: Expr builtin
   }
 
 -- | Checks whether a candidate is a possibility for the instance goal.
@@ -245,7 +247,7 @@ acceptCandidate ::
   WithContext (InstanceConstraint builtin) ->
   InstanceGoal builtin ->
   WithContext (InstanceCandidate builtin) ->
-  m (Value builtin)
+  m (Expr builtin)
 acceptCandidate (WithContext Resolve {..} constraintCtx) goal candidate = do
   -- Allow the candidate to access all the arguments in the goal telescope.
   let goalCtxExtension = goalTelescope goal
@@ -275,22 +277,19 @@ instantiateCandidateTelescope ::
   BoundCtx (Type builtin) ->
   InstanceConstraintInfo builtin ->
   WithContext (InstanceCandidate builtin) ->
-  m (Value builtin, Expr builtin)
+  m (Expr builtin, Expr builtin)
 instantiateCandidateTelescope goalCtxExtension (constraintCtx, constraintOrigin) candidate = do
   let WithContext InstanceCandidate {..} candidateCtx = candidate
   logCompilerSection MaxDetail "instantiating candidate telescope" $ do
     let initialCtx = goalCtxExtension ++ candidateCtx
     let createInstance relevance typ = do
           let newInfo = (setConstraintBoundCtx constraintCtx initialCtx, constraintOrigin)
-          -- WARNING massive hack should be traversing the normalised type here.
-          normBinderType <- eval (toNamedBoundCtx initialCtx) (boundContextToEnv initialCtx) typ
-          (expr, constraint) <- createDerivedInstanceConstraint newInfo relevance normBinderType
+          (expr, constraint) <- createDerivedInstanceConstraint newInfo relevance typ
           addInstanceConstraints [constraint]
           return expr
 
     (candidateBody, candidateSol, _args) <- instantiateTelescope InstanceTelescope createInstance initialCtx (candidateExpr, candidateSolution)
-    normCandidateBody <- eval (toNamedBoundCtx initialCtx) (boundContextToEnv initialCtx) candidateBody
-    return (normCandidateBody, candidateSol)
+    return (candidateBody, candidateSol)
 
 -- | Sees if one of the candidates is provably less general than all the
 -- others, e.g.
@@ -301,59 +300,67 @@ instantiateCandidateTelescope goalCtxExtension (constraintCtx, constraintOrigin)
 --
 --   {{TensorLike r}} -> HasAdd r
 findLeastGeneralCandidate ::
-  (Eq builtin) =>
+  (MonadInstance builtin m, Eq builtin) =>
+  NamedBoundCtx ->
   [SuccessfulInstanceCandidate builtin] ->
-  Maybe (SuccessfulInstanceCandidate builtin)
-findLeastGeneralCandidate = \case
+  m (Maybe (SuccessfulInstanceCandidate builtin))
+findLeastGeneralCandidate ctx = \case
   -- TODO this could be generalised to find a minimum in the whole graph
   -- but this is sufficient now.
-  [c1, c2] -> case c1 `lessGeneralThan` c2 of
-    Nothing -> Nothing
-    -- This is a hack to stop type-classes with zero arguments
-    -- from being declared equal (e.g. `IsTensorType` in decidability types)...
-    Just EQ -> Nothing
-    Just LT -> Just c1
-    Just GT -> Just c2
-  _ -> Nothing
+  [c1, c2] -> do
+    isLessGeneral <- lessGeneralThan ctx c1 c2
+    return $ case isLessGeneral of
+      Nothing -> Nothing
+      -- This is a hack to stop type-classes with zero arguments
+      -- from being declared equal (e.g. `IsTensorType` in decidability types)...
+      Just EQ -> Nothing
+      Just LT -> Just c1
+      Just GT -> Just c2
+  _ -> return Nothing
 
 lessGeneralThan ::
-  forall builtin.
-  (Eq builtin) =>
+  forall builtin m.
+  (MonadInstance builtin m, Eq builtin) =>
+  NamedBoundCtx ->
   SuccessfulInstanceCandidate builtin ->
   SuccessfulInstanceCandidate builtin ->
-  Maybe Ordering
-lessGeneralThan candidate1 candidate2 =
+  m (Maybe Ordering)
+lessGeneralThan ctx candidate1 candidate2 =
   go (successfulSolution candidate1) (successfulSolution candidate2)
   where
-    go :: Value builtin -> Value builtin -> Maybe Ordering
-    go v1 v2 = case (v1, v2) of
-      (VMeta {}, VMeta {}) -> Just EQ
-      (VMeta {}, _) -> Just GT
-      (_, VMeta {}) -> Just LT
-      (VBuiltin b1 args1, VBuiltin b2 args2)
-        | b1 /= b2 -> Nothing
-        | otherwise -> goArgs args1 args2
-      (VFreeVar i1 args1, VFreeVar i2 args2)
-        | i1 /= i2 -> Nothing
-        | otherwise -> goArgs args1 args2
-      -- TODO extend with remaining cases?
-      _ -> Nothing
+    go :: Expr builtin -> Expr builtin -> m (Maybe Ordering)
+    go v1 v2 = do
+      (f1, _) <- forceHead ctx v1
+      (f2, _) <- forceHead ctx v2
+      case (f1, f2) of
+        (FMeta {}, FMeta {}) -> return $ Just EQ
+        (FMeta {}, _) -> return $ Just GT
+        (_, FMeta {}) -> return $ Just LT
+        (FBuiltin _ b1 args1, FBuiltin _ b2 args2)
+          | b1 /= b2 -> return Nothing
+          | otherwise -> goArgs args1 args2
+        (FFreeVar _ i1 args1, FFreeVar _ i2 args2)
+          | i1 /= i2 -> return Nothing
+          | otherwise -> goArgs args1 args2
+        -- TODO extend with remaining cases?
+        _ -> return Nothing
 
-    goArgs :: Spine builtin -> Spine builtin -> Maybe Ordering
+    goArgs :: Args builtin -> Args builtin -> m (Maybe Ordering)
     goArgs args1 args2
-      | length args1 /= length args2 = Nothing
+      | length args1 /= length args2 = return Nothing
       | otherwise = do
-          let maybeResults = zipWith (\x y -> go (argExpr x) (argExpr y)) args1 args2
+          maybeResults <- zipWithM (\x y -> go (argExpr x) (argExpr y)) args1 args2
           let OrderingCounts {..} = countOrderings maybeResults
-          if numberOfNothings > 0 || (numberOfLTs > 0 && numberOfGTs > 0)
-            then Nothing
-            else
-              if numberOfEQs == length maybeResults
-                then Just EQ
-                else
-                  if numberOfLTs > 0
-                    then Just LT
-                    else Just GT
+          return $
+            if numberOfNothings > 0 || (numberOfLTs > 0 && numberOfGTs > 0)
+              then Nothing
+              else
+                if numberOfEQs == length maybeResults
+                  then Just EQ
+                  else
+                    if numberOfLTs > 0
+                      then Just LT
+                      else Just GT
 
 data OrderingCounts = OrderingCounts
   { numberOfNothings :: Int,

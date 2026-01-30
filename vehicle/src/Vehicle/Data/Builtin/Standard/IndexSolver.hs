@@ -8,6 +8,7 @@ import Control.Monad (forM)
 import Control.Monad.Except (MonadError (..))
 import Data.Maybe (mapMaybe)
 import Vehicle.Compile.Error
+import Vehicle.Compile.Normalise.NBE (normalise)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyFriendly)
 import Vehicle.Compile.Type.Constraint.Core
@@ -15,10 +16,12 @@ import Vehicle.Compile.Type.Core
 import Vehicle.Compile.Type.Meta (MetaSet)
 import Vehicle.Compile.Type.Meta.Set qualified as MetaSet
 import Vehicle.Compile.Type.Monad.Class
+import Vehicle.Data.Builtin.Interface
 import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Code.Interface
 import Vehicle.Data.Code.TypedView
 import Vehicle.Data.Code.Value
+import Vehicle.Data.Variable.Bound.Context.Generic (runBoundContextT)
 
 --------------------------------------------------------------------------------
 -- Solve index constraints
@@ -32,7 +35,9 @@ solveIndexConstraint constraint = do
   logDebug MaxDetail $ "Forced:" <+> prettyFriendly normConstraint
 
   let args = mapMaybe getExplicitArg $ goalSpine $ instanceGoal $ objectIn normConstraint
-  progress <- solveInDomain normConstraint args
+  -- TODO Switch this over to forcing
+  normArgs <- runBoundContextT (boundContext $ contextOf constraint) $ traverse normalise args
+  progress <- solveInDomain normConstraint normArgs
   case progress of
     Nothing -> do
       let solution = Builtin mempty (BuiltinConstructor UnitLiteral)
@@ -77,6 +82,11 @@ blockOnMetas args = do
     then Nothing
     else Just (MetaSet.fromList metas)
 
+getNMeta :: Value Builtin -> Maybe MetaID
+getNMeta = \case
+  VMeta m _ -> Just m
+  _ -> Nothing
+
 findLowerBound ::
   forall m.
   (MonadTypeChecker Builtin m) =>
@@ -117,10 +127,10 @@ solveDefaultIndexConstraint ::
   m Bool
 solveDefaultIndexConstraint (WithContext constraint ctx) = do
   case instanceGoal constraint of
-    (InstanceGoal [] (Right NatInDomainConstraint) [n, argExpr -> toTypeValue -> VIndexType size]) -> do
-      let succN = fromNatValue $ case argExpr n of
-            INatLiteral x -> VNatLiteral (x + 1)
-            n' -> VNatAdd (Op2Args n' (INatLiteral 1))
+    (InstanceGoal [] (Right NatInDomainConstraint) [n, argExpr -> IIndexType size]) -> do
+      let succN = case argExpr n of
+            INatLiteral x -> INatLiteral (x + 1)
+            n' -> mkExpr accessAddNat (Op2Args n' (INatLiteral 1))
 
       let constraintInfo = (ctx, instanceOrigin constraint)
       newSizeConstraint <- createInstanceUnification constraintInfo size succN

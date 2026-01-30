@@ -8,10 +8,10 @@ import Data.List.NonEmpty (NonEmpty)
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import Vehicle.Data.Builtin.Interface
-import Vehicle.Data.Builtin.Interface.Blocked (BlockingStatus (DoesNotReduce), functionBlockingStatus)
 import Vehicle.Data.Builtin.Interface.Normalise
 import Vehicle.Data.Builtin.Interface.Print
 import Vehicle.Data.Builtin.Standard.Core
+import Vehicle.Data.Code.Interface (HasBuiltinConstructor)
 import Vehicle.Data.DSL
 import Vehicle.Prelude
 
@@ -205,17 +205,12 @@ instance PrintableBuiltin PolarityBuiltin where
 -----------------------------------------------------------------------------
 -- Normalisation
 
-instance NormalisableBuiltin PolarityBuiltin where
-  evalScheme b = case b of
-    PolarityFunction Iterate -> NonSimple evalIterate
-    PolarityFunction _ -> None
-    _ -> None
+instance (HasBuiltinConstructor expr) => NormalisableBuiltin expr PolarityBuiltin where
+  evaluationScheme b spine = case b of
+    PolarityFunction Iterate -> NonSimple $ evalIterate spine
+    PolarityFunction _ -> Unevaluable
+    _ -> Unevaluable
 
-  blockingStatus b spine = case b of
-    PolarityFunction f -> functionBlockingStatus f spine
-    _ -> DoesNotReduce
-
-  isTypeClassOp _ = False
   isCast _ _ = Nothing
 
 -----------------------------------------------------------------------------

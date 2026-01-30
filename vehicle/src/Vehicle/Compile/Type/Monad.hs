@@ -49,10 +49,10 @@ import Data.Maybe (isJust)
 import Data.Proxy (Proxy (..))
 import Vehicle.Compile.Error (CompileError (..), TypingError (..), compilerDeveloperError)
 import Vehicle.Compile.Normalise.NBE
-import Vehicle.Compile.Normalise.Quote (Quote (..))
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (PrettyExternal, prettyExternal, prettyVerbose)
 import Vehicle.Compile.Type.Core
+import Vehicle.Compile.Type.Force (ForcedExpr (..), forceHead)
 import Vehicle.Compile.Type.Meta (MetaSet)
 import Vehicle.Compile.Type.Meta.Map qualified as MetaMap
 import Vehicle.Compile.Type.Meta.Variable (MetaInfo (..), addMetaSolution)
@@ -64,6 +64,7 @@ import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin (..))
 import Vehicle.Data.Code.ModuleInterface
 import Vehicle.Data.Code.Value
 import Vehicle.Data.Variable.Bound.Context.Generic
+import Vehicle.Data.Variable.Bound.Context.Name.Core (NamedBoundCtx)
 
 runTypeCheckerTInitially ::
   (Monad m, TypableBuiltin builtin) =>
@@ -156,12 +157,10 @@ createFreshInstanceConstraint ::
   Type builtin ->
   m (Expr builtin)
 createFreshInstanceConstraint auxiliaryConstraint boundCtx p origin relevance tcExpr = do
-  let env = boundContextToEnv boundCtx
   (metaID, metaExpr) <- freshSolutionMeta p tcExpr boundCtx
 
   context <- createFreshConstraintCtx p boundCtx
-  nTCExpr <- eval (toNamedBoundCtx boundCtx) env tcExpr
-  let goal = parseInstanceGoal nTCExpr
+  goal <- parseInstanceGoal (toNamedBoundCtx boundCtx) tcExpr
   let constraint = WithContext (Resolve origin metaID relevance Nothing goal) context
 
   if auxiliaryConstraint
@@ -175,32 +174,40 @@ createDerivedInstanceConstraint ::
   (MonadTypeChecker builtin m) =>
   (ConstraintContext builtin, InstanceConstraintOrigin builtin) ->
   Relevance ->
-  Value builtin ->
+  Expr builtin ->
   m (Expr builtin, WithContext (InstanceConstraint builtin))
 createDerivedInstanceConstraint (ctx, origin) r t = do
   let p = provenanceOf ctx
-  let dbLevel = contextDBLevel ctx
-  let newTypeClassExpr = quote p dbLevel t
-  (metaID, metaExpr) <- freshSolutionMeta p newTypeClassExpr (boundContextOf ctx)
-  let newConstraint = Resolve origin metaID r Nothing $ parseInstanceGoal t
-
+  (metaID, metaExpr) <- freshSolutionMeta p t (boundContextOf ctx)
+  goal <- parseInstanceGoal (namedBoundCtxOf ctx) t
+  let newConstraint =
+        Resolve
+          { instanceOrigin = origin,
+            instanceSolution = metaID,
+            instanceRelevance = r,
+            instanceCandidateState = Nothing,
+            instanceGoal = goal
+          }
   newCtx <- copyContext ctx Nothing
   return (metaExpr, WithContext newConstraint newCtx)
 
 parseInstanceGoal ::
-  forall builtin.
-  (PrintableBuiltin builtin) =>
-  Value builtin ->
-  InstanceGoal builtin
-parseInstanceGoal originalValue = go [] originalValue
+  forall builtin m.
+  (MonadTypeChecker builtin m) =>
+  NamedBoundCtx ->
+  Expr builtin ->
+  m (InstanceGoal builtin)
+parseInstanceGoal ctx originalValue = go [] originalValue
   where
-    go :: Telescope builtin -> Value builtin -> InstanceGoal builtin
-    go telescope = \case
-      VPi binder _body
-        | not (isExplicit binder) -> developerError "Instance goals with telescopes not yet supported"
-      VBuiltin b spine -> InstanceGoal telescope (Right b) spine
-      VFreeVar b spine -> InstanceGoal telescope (Left b) spine
-      _ -> developerError $ "Malformed instance goal" <+> prettyVerbose originalValue
+    go :: Telescope builtin -> Expr builtin -> m (InstanceGoal builtin)
+    go telescope expr = do
+      (forcedExpr, _) <- forceHead ctx expr
+      case forcedExpr of
+        FPi _ binder _body
+          | not (isExplicit binder) -> developerError "Instance goals with telescopes not yet supported"
+        FBuiltin _ b spine -> return $ InstanceGoal telescope (Right b) spine
+        FFreeVar _ b spine -> return $ InstanceGoal telescope (Left b) spine
+        _ -> developerError $ "Malformed instance goal" <+> prettyVerbose originalValue
 
 addInstanceToInstanceDatabase ::
   forall builtin m.

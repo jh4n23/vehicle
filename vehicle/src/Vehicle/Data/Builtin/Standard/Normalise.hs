@@ -7,7 +7,6 @@ where
 
 import Vehicle.Data.Builtin.Core as Syntax
 import Vehicle.Data.Builtin.Interface
-import Vehicle.Data.Builtin.Interface.Blocked
 import Vehicle.Data.Builtin.Interface.Normalise
 import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Code.Interface
@@ -24,21 +23,21 @@ instance (HasBuiltinConstructor expr) => HasTensorLiterals expr Builtin where
       Wrapper accessRatTensorLiteral
     ]
 
-instance HasLiftableTensorOperations Builtin where
+instance (HasBuiltinConstructor expr) => HasLiftableTensorOperations expr Builtin where
   liftableTensorOp1s =
-    [ (getExpr accessNegRatTensor, evalNegRatTensor, IRatType),
-      (getExpr accessNotTensor, evalNot, IBoolType)
+    [ (accessNegRatTensor, evalNegRatTensor, IRatType),
+      (accessNotTensor, evalNot, IBoolType)
     ]
 
   liftableTensorOp2s =
-    [ (getExpr accessAddRatTensor, evalAddRatTensor, IRatType),
-      (getExpr accessMulRatTensor, evalMulRatTensor, IRatType),
-      (getExpr accessSubRatTensor, evalSubRatTensor, IRatType),
-      (getExpr accessDivRatTensor, evalDivRatTensor, IRatType),
-      (getExpr accessMinRatTensor, evalMinRatTensor, IRatType),
-      (getExpr accessMaxRatTensor, evalMaxRatTensor, IRatType),
-      (getExpr accessAndTensor, evalAnd, IBoolType),
-      (getExpr accessOrTensor, evalOr, IBoolType),
+    [ (accessAddRatTensor, evalAddRatTensor, IRatType),
+      (accessMulRatTensor, evalMulRatTensor, IRatType),
+      (accessSubRatTensor, evalSubRatTensor, IRatType),
+      (accessDivRatTensor, evalDivRatTensor, IRatType),
+      (accessMinRatTensor, evalMinRatTensor, IRatType),
+      (accessMaxRatTensor, evalMaxRatTensor, IRatType),
+      (accessAndTensor, evalAnd, IBoolType),
+      (accessOrTensor, evalOr, IBoolType),
       compPointwise Eq,
       compPointwise Ne,
       compPointwise Le,
@@ -47,64 +46,55 @@ instance HasLiftableTensorOperations Builtin where
       compPointwise Gt
     ]
     where
-      compPointwise op = (getExpr (accessArgsForOp accessCompareRatTensorPointwise op), evalCompareRatTensorPointwise op, IBoolType)
+      compPointwise op = (accessArgsForOp accessCompareRatTensorPointwise op, evalCompareRatTensorPointwise op, IBoolType)
 
-instance NormalisableBuiltin Builtin where
-  evalScheme = \case
+instance NormalisableBuiltin expr Builtin where
+  evaluationScheme = \case
     BuiltinFunction f -> case f of
-      CompareIndex op -> Simple (evalCompareIndex op)
-      CompareNat op -> Simple (evalCompareNat op)
-      CompareRatTensorPointwise op -> Simple (evalCompareRatTensorPointwise op)
-      Not -> Simple evalNot
-      And -> Simple evalAnd
-      Or -> Simple evalOr
-      Add AddNat -> Simple evalAddNat
-      Mul MulNat -> Simple evalMulNat
-      Neg NegRatTensor -> Simple evalNegRatTensor
-      Add AddRatTensor -> Simple evalAddRatTensor
-      Sub SubRatTensor -> Simple evalSubRatTensor
-      Mul MulRatTensor -> Simple evalMulRatTensor
-      Div DivRatTensor -> Simple evalDivRatTensor
-      Min MinRatTensor -> Simple evalMinRatTensor
-      Max MaxRatTensor -> Simple evalMaxRatTensor
-      PowRat -> Simple evalPowRat
-      ReduceAddRatTensor -> Simple evalReduceAddRatTensor
-      ReduceMulRatTensor -> Simple evalReduceMulRatTensor
-      ReduceMinRatTensor -> Simple evalReduceMinRatTensor
-      ReduceMaxRatTensor -> Simple evalReduceMaxRatTensor
-      ReduceAndTensor -> NonSimple evalReduceAndTensor
-      ReduceOrTensor -> Simple evalReduceOrTensor
-      If -> Simple evalIf
-      Implies -> Simple evalImplies
-      AtVector -> Simple evalAtVector
-      AtTensor -> NonSimple evalAtTensor
-      StackTensor -> Simple evalStackTensor
-      ConstTensor -> Simple evalConstTensor
-      FoldList -> NonSimple evalFoldList
-      MapList -> NonSimple evalMapList
-      ForeachTensor -> NonSimple evalForeachTensor
-      ForeachVector -> NonSimple evalForeachVector
-      Iterate -> NonSimple evalIterate
-      QuantifyRatTensor {} -> None
-      QuantifyTensorLike {} -> None
+      CompareIndex op -> simpleEvaluation (evalCompareIndex op)
+      CompareNat op -> simpleEvaluation (evalCompareNat op)
+      CompareRatTensorPointwise op -> simpleEvaluation (evalCompareRatTensorPointwise op)
+      Not -> simpleEvaluation evalNot
+      And -> simpleEvaluation evalAnd
+      Or -> simpleEvaluation evalOr
+      Add AddNat -> simpleEvaluation evalAddNat
+      Mul MulNat -> simpleEvaluation evalMulNat
+      Neg NegRatTensor -> simpleEvaluation evalNegRatTensor
+      Add AddRatTensor -> simpleEvaluation evalAddRatTensor
+      Sub SubRatTensor -> simpleEvaluation evalSubRatTensor
+      Mul MulRatTensor -> simpleEvaluation evalMulRatTensor
+      Div DivRatTensor -> simpleEvaluation evalDivRatTensor
+      Min MinRatTensor -> simpleEvaluation evalMinRatTensor
+      Max MaxRatTensor -> simpleEvaluation evalMaxRatTensor
+      PowRat -> simpleEvaluation evalPowRat
+      ReduceAddRatTensor -> simpleEvaluation evalReduceAddRatTensor
+      ReduceMulRatTensor -> simpleEvaluation evalReduceMulRatTensor
+      ReduceMinRatTensor -> simpleEvaluation evalReduceMinRatTensor
+      ReduceMaxRatTensor -> simpleEvaluation evalReduceMaxRatTensor
+      ReduceAndTensor -> StandardEvaluation evalReduceAndTensor
+      ReduceOrTensor -> simpleEvaluation evalReduceOrTensor
+      If -> simpleEvaluation evalIf
+      Implies -> simpleEvaluation evalImplies
+      AtVector -> simpleEvaluation evalAtVector
+      AtTensor -> StandardEvaluation evalAtTensor
+      StackTensor -> simpleEvaluation evalStackTensor
+      ConstTensor -> simpleEvaluation evalConstTensor
+      FoldList -> StandardEvaluation evalFoldList
+      MapList -> StandardEvaluation evalMapList
+      ForeachTensor -> StandardEvaluation evalForeachTensor
+      ForeachVector -> StandardEvaluation evalForeachVector
+      Iterate -> StandardEvaluation evalIterate
+      QuantifyRatTensor {} -> Unevaluable
+      QuantifyTensorLike {} -> Unevaluable
     BuiltinCast c -> case c of
-      FromNat FromNatToNat -> Simple evalFromNatToNat
-      FromNat FromNatToIndex -> Simple evalFromNatToIndex
-      FromNat FromNatToRat -> Simple evalFromNatToRat
-      FromRat FromRatToRat -> Simple evalFromRatToRat
-      FromVectorToList -> Simple evalVectorToList
-    DerivedFunction f -> Derived (identifierOf f)
-    _ -> None
-
-  blockingStatus = \case
-    BuiltinFunction f -> functionBlockingStatus f
-    BuiltinCast c -> castBlockingStatus c
-    DerivedFunction f -> derivedFunctionBlockingStatus f
-    _ -> return DoesNotReduce
-
-  isTypeClassOp = \case
-    TypeClassOp {} -> True
-    _ -> False
+      FromNat FromNatToNat -> simpleEvaluation evalFromNatToNat
+      FromNat FromNatToIndex -> simpleEvaluation evalFromNatToIndex
+      FromNat FromNatToRat -> simpleEvaluation evalFromNatToRat
+      FromRat FromRatToRat -> simpleEvaluation evalFromRatToRat
+      FromVectorToList -> simpleEvaluation evalVectorToList
+    DerivedFunction f -> DerivedEvaluation (identifierOf f)
+    TypeClassOp {} -> TypeClassEvaluation
+    _ -> Unevaluable
 
   isCast p b = case b of
     BuiltinCast c -> Just $ case c of
@@ -119,27 +109,27 @@ instance NormalisableBuiltin Builtin where
         forceEvalSimpleBuiltin p b evalStackTensor
     _ -> Nothing
 
-evalFromNatToNat :: (MonadNormBuiltin m) => EvalSimple FromNatToSimpleArgs expr Builtin m
-evalFromNatToNat (FromNatToSimpleArgs v _) = return v
+evalFromNatToNat :: (MonadNormBuiltin m) => SimpleStandardBuiltinEvaluation FromNatToSimpleArgs expr Builtin m
+evalFromNatToNat (FromNatToSimpleArgs v _) = return $ Right v
 
-evalFromNatToIndex :: (MonadNormBuiltin m, HasBuiltinConstructor expr) => EvalSimple FromNatToIndexArgs expr Builtin m
-evalFromNatToIndex args = return $ case args of
-  FromNatToIndexArgs d (INatLiteral v) _ -> IIndexLiteral v d
-  _ -> mkExpr accessFromNatToIndex args
+evalFromNatToIndex :: (MonadNormBuiltin m, HasBuiltinConstructor expr) => SimpleStandardBuiltinEvaluation FromNatToIndexArgs expr Builtin m
+evalFromNatToIndex args = case args of
+  FromNatToIndexArgs d (INatLiteral v) _ -> return $ Right $ IIndexLiteral v d
+  _ -> return $ Left $ blocked [1] args
 
-evalFromNatToRat :: (MonadNormBuiltin m, HasBuiltinConstructor expr) => EvalSimple FromNatToSimpleArgs expr Builtin m
-evalFromNatToRat args = return $ case args of
-  FromNatToSimpleArgs (INatLiteral n) _ -> IRatLiteral $ fromIntegral n
-  _ -> mkExpr accessFromNatToRat args
+evalFromNatToRat :: (MonadNormBuiltin m, HasBuiltinConstructor expr) => SimpleStandardBuiltinEvaluation FromNatToSimpleArgs expr Builtin m
+evalFromNatToRat args = case args of
+  FromNatToSimpleArgs (INatLiteral n) _ -> return $ Right $ IRatLiteral $ fromIntegral n
+  _ -> return $ Left $ blocked [0] args
 
-evalFromRatToRat :: (MonadNormBuiltin m) => EvalSimple Op1Args expr Builtin m
-evalFromRatToRat (Op1Args x) = return x
+evalFromRatToRat :: (MonadNormBuiltin m) => SimpleStandardBuiltinEvaluation Op1Args expr Builtin m
+evalFromRatToRat (Op1Args x) = return $ Right x
 
-evalVectorToList :: (MonadNormBuiltin m, HasBuiltinConstructor expr) => EvalSimple VectorToListArgs expr Builtin m
+evalVectorToList :: (MonadNormBuiltin m, HasBuiltinConstructor expr) => SimpleStandardBuiltinEvaluation VectorToListArgs expr Builtin m
 evalVectorToList args@(VectorToListArgs t d xs) =
-  return $ case argExpr d of
-    INatLiteral n | n == length xs -> mkListExpr (argExpr t) xs
-    _ -> mkExpr accessFromVectorToList args
+  case argExpr d of
+    INatLiteral n | n == length xs -> return $ Right $ mkListExpr (argExpr t) xs
+    _ -> return $ Left $ blocked [1] args
 
 foldReduceAndComparison ::
   TensorReductionArgs (Value Builtin) ->

@@ -168,6 +168,7 @@ instance HasBasicBinders (Expr builtin) where
     Lam _ binder body -> Just (binder, body)
     _ -> Nothing
 
+instance HasLetBinders (Expr builtin) where
   getLetBinder = \case
     Let _ value binder body -> Just (value, binder, body)
     _ -> Nothing

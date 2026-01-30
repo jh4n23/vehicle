@@ -6,11 +6,11 @@ where
 import Control.Monad.Except (MonadError (..))
 import Data.Maybe (mapMaybe)
 import Vehicle.Compile.Error
-import Vehicle.Compile.Normalise.NBE (normaliseClosureInCtx)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyFriendly)
 import Vehicle.Compile.Type.Constraint.Core
 import Vehicle.Compile.Type.Core
+import Vehicle.Compile.Type.Force
 import Vehicle.Compile.Type.Monad
 import Vehicle.Compile.Type.System
 import Vehicle.Data.Builtin.Core
@@ -42,10 +42,8 @@ solvePolarityConstraint constraintWithCtx = do
 --------------------------------------------------------------------------------
 -- Constraint solving
 
-pattern VPolarityExpr :: Polarity -> Value PolarityBuiltin
-pattern VPolarityExpr l <- VBuiltin (Polarity l) []
-  where
-    VPolarityExpr l = VBuiltin (Polarity l) []
+pattern FPolarityExpr :: Polarity -> ForcedExpr PolarityBuiltin
+pattern FPolarityExpr l <- FBuiltin _ (Polarity l) []
 
 type MonadPolaritySolver m =
   ( MonadTypeChecker PolarityBuiltin m,
@@ -56,7 +54,7 @@ type PolaritySolver =
   forall m.
   (MonadPolaritySolver m) =>
   InstanceConstraintInfo PolarityBuiltin ->
-  [VType PolarityBuiltin] ->
+  [Type PolarityBuiltin] ->
   Maybe (m (AuxiliaryConstraintProgress PolarityBuiltin))
 
 solve :: PolarityRelation -> PolaritySolver
@@ -70,94 +68,97 @@ solve = \case
   IfPolarity -> solveIfCondPolarity
 
 solveNegPolarity :: PolaritySolver
-solveNegPolarity info@(ctx, _) [arg1, res] = case arg1 of
-  (getNMeta -> Just m) -> blockOn [m]
-  VPolarityExpr pol -> Just $ do
-    let resPol = VPolarityExpr $ negatePolarity (provenanceOf ctx) pol
-    resEq <- createInstanceUnification info res resPol
-    return $ Progress [resEq] []
-  _ -> Nothing
+solveNegPolarity info@(ctx, _) [arg, res] = Just $ do
+  (forcedArg, blockingMetas) <- forceHead (namedBoundCtxOf ctx) arg
+  case forcedArg of
+    FPolarityExpr pol -> do
+      let resPol = Builtin mempty $ Polarity $ negatePolarity (provenanceOf ctx) pol
+      resEq <- createInstanceUnification info res resPol
+      return $ Progress [resEq] []
+    _ -> return $ Stuck blockingMetas
 solveNegPolarity _ _ = Nothing
 
 solveQuantifierPolarity :: Quantifier -> PolaritySolver
-solveQuantifierPolarity q info@(ctx, _) [lam, res] = case lam of
-  (getNMeta -> Just m) -> blockOn [m]
-  (VPi binder resPol) -> Just $ do
-    let (_, p) = getNamedBinderInfo binder
-    binderEq <- createInstanceUnification info (typeOf binder) (VPolarityExpr Unquantified)
-    let tc = PolarityRelation $ AddPolarity p q
-    resultPolarity <- normaliseClosureInCtx (toNamedBoundCtx $ boundContext ctx) binder resPol
-    (_, addConstraint) <- createDerivedInstanceConstraint info Irrelevant (VBuiltin tc (explicit <$> [resultPolarity, res]))
-    return $ Progress [binderEq] [addConstraint]
-  _ -> Nothing
+solveQuantifierPolarity q info@(ctx, _) [fn, res] = Just $ do
+  (forcedFn, blockingMetas) <- forceHead (namedBoundCtxOf ctx) fn
+  case forcedFn of
+    FPi _ binder resPol -> do
+      let (_, p) = getNamedBinderInfo binder
+      binderEq <- createInstanceUnification info (typeOf binder) (Builtin mempty $ Polarity Unquantified)
+      let tc = PolarityRelation $ AddPolarity p q
+      (_, addConstraint) <- createDerivedInstanceConstraint info Irrelevant (normAppList (Builtin mempty tc) (explicit <$> [resPol, res]))
+      return $ Progress [binderEq] [addConstraint]
+    _ -> return $ Stuck blockingMetas
 solveQuantifierPolarity _ _c _ = Nothing
 
 solveAddPolarityOp :: Provenance -> Quantifier -> PolaritySolver
-solveAddPolarityOp p q info [arg, res] = do
-  case arg of
-    (getNMeta -> Just m) -> blockOn [m]
-    VPolarityExpr inputPol -> Just $ do
-      let resPol = VPolarityExpr $ addPolarityOp p q inputPol
+solveAddPolarityOp p q info@(ctx, _) [arg, res] = Just $ do
+  (forcedArg, blockingMetas) <- forceHead (namedBoundCtxOf ctx) arg
+  case forcedArg of
+    FPolarityExpr inputPol -> do
+      let resPol = Builtin mempty $ Polarity $ addPolarityOp p q inputPol
       domEq <- createInstanceUnification info res resPol
       return $ Progress [domEq] []
-    _ -> Nothing
+    _ -> return $ Stuck blockingMetas
 solveAddPolarityOp _ _ _ _ = Nothing
 
 solveMaxPolarityOp :: PolaritySolver
-solveMaxPolarityOp info [arg1, arg2, res] = case (arg1, arg2) of
-  (VPolarityExpr pol1, VPolarityExpr pol2) -> Just $ do
-    let pol3 = VPolarityExpr $ maxPolarityOp pol1 pol2
-    resEq <- createInstanceUnification info res pol3
-    return $ Progress [resEq] []
-  (_, VPolarityExpr Unquantified) -> Just $ do
-    resEq <- createInstanceUnification info arg1 res
-    return $ Progress [resEq] []
-  (VPolarityExpr Unquantified, _) -> Just $ do
-    resEq <- createInstanceUnification info arg2 res
-    return $ Progress [resEq] []
-  (getNMeta -> Just m1, _) -> blockOn [m1]
-  (_, getNMeta -> Just m2) -> blockOn [m2]
-  _ -> Nothing
+solveMaxPolarityOp info@(ctx, _) [arg1, arg2, res] = Just $ do
+  (forcedArg1, blockingMetas1) <- forceHead (namedBoundCtxOf ctx) arg1
+  (forcedArg2, blockingMetas2) <- forceHead (namedBoundCtxOf ctx) arg2
+  case (forcedArg1, forcedArg2) of
+    (FPolarityExpr pol1, FPolarityExpr pol2) -> do
+      let pol3 = Builtin mempty $ Polarity $ maxPolarityOp pol1 pol2
+      resEq <- createInstanceUnification info res pol3
+      return $ Progress [resEq] []
+    (_, FPolarityExpr Unquantified) -> do
+      resEq <- createInstanceUnification info arg1 res
+      return $ Progress [resEq] []
+    (FPolarityExpr Unquantified, _) -> do
+      resEq <- createInstanceUnification info arg2 res
+      return $ Progress [resEq] []
+    _ -> return $ Stuck $ blockingMetas1 <> blockingMetas2
 solveMaxPolarityOp _ _ = Nothing
 
 solveImplPolarity :: PolaritySolver
-solveImplPolarity info@(ctx, _) [arg1, arg2, res] = case (arg1, arg2) of
-  (VPolarityExpr pol1, VPolarityExpr pol2) -> Just $ do
-    let pol3 = VPolarityExpr $ implPolarityOp (provenanceOf ctx) pol1 pol2
-    resEq <- createInstanceUnification info res pol3
-    return $ Progress [resEq] []
-  (getNMeta -> Just m1, _) -> blockOn [m1]
-  (_, getNMeta -> Just m2) -> blockOn [m2]
-  _ -> Nothing
+solveImplPolarity info@(ctx, _) [arg1, arg2, res] = Just $ do
+  (forcedArg1, blockingMetas1) <- forceHead (namedBoundCtxOf ctx) arg1
+  (forcedArg2, blockingMetas2) <- forceHead (namedBoundCtxOf ctx) arg2
+  case (forcedArg1, forcedArg2) of
+    (FPolarityExpr pol1, FPolarityExpr pol2) -> do
+      let pol3 = Builtin mempty $ Polarity $ implPolarityOp (provenanceOf ctx) pol1 pol2
+      resEq <- createInstanceUnification info res pol3
+      return $ Progress [resEq] []
+    _ -> return $ Stuck $ blockingMetas1 <> blockingMetas2
 solveImplPolarity _ _ = Nothing
 
 solveFunctionPolarity :: FunctionPosition -> PolaritySolver
-solveFunctionPolarity functionPosition info@(ctx, _) [arg, res] = case (arg, res) of
-  (getNMeta -> Just m1, _) -> blockOn [m1]
-  (VPolarityExpr pol, _) -> Just $ do
-    let p = provenanceOf ctx
-    let addFuncProv pp = PolFunctionProvenance p pp functionPosition
-    let pol3 = VPolarityExpr $ mapPolarityProvenance addFuncProv pol
-    resEq <- createInstanceUnification info res pol3
-    return $ Progress [resEq] []
-  (VPi binder1 closure1, VPi binder2 closure2) -> Just $ do
-    let tc = PolarityRelation $ FunctionPolarity functionPosition
-    (_, binderConstraint) <- createDerivedInstanceConstraint info Irrelevant (VBuiltin tc (explicit <$> [typeOf binder1, typeOf binder2]))
-    let namedCtx = toNamedBoundCtx $ boundContext ctx
-    body1 <- normaliseClosureInCtx namedCtx binder1 closure1
-    body2 <- normaliseClosureInCtx namedCtx binder2 closure2
-    (_, bodyConstraint) <- createDerivedInstanceConstraint info Irrelevant (VBuiltin tc (explicit <$> [body1, body2]))
-    return $ Progress [] [binderConstraint, bodyConstraint]
-  _ -> Nothing
+solveFunctionPolarity functionPosition info@(ctx, _) [arg, res] = Just $ do
+  (forcedArg, blockingMetas1) <- forceHead (namedBoundCtxOf ctx) arg
+  (forcedRes, blockingMetas2) <- forceHead (namedBoundCtxOf ctx) res
+  case (forcedArg, forcedRes) of
+    (FPolarityExpr pol, _) -> do
+      let p = provenanceOf ctx
+      let addFuncProv pp = PolFunctionProvenance p pp functionPosition
+      let pol3 = Builtin mempty $ Polarity $ mapPolarityProvenance addFuncProv pol
+      resEq <- createInstanceUnification info res pol3
+      return $ Progress [resEq] []
+    (FPi _ binder1 body1, FPi _ binder2 body2) -> do
+      let tc = PolarityRelation $ FunctionPolarity functionPosition
+      (_, binderConstraint) <- createDerivedInstanceConstraint info Irrelevant (normAppList (Builtin mempty tc) (explicit <$> [typeOf binder1, typeOf binder2]))
+      (_, bodyConstraint) <- createDerivedInstanceConstraint info Irrelevant (normAppList (Builtin mempty tc) (explicit <$> [body1, body2]))
+      return $ Progress [] [binderConstraint, bodyConstraint]
+    _ -> return $ Stuck $ blockingMetas1 <> blockingMetas2
 solveFunctionPolarity _ _ _ = Nothing
 
 solveIfCondPolarity :: PolaritySolver
-solveIfCondPolarity info@(ctx, _) [pCond, pArg1, pArg2, pRes] = case pCond of
-  (getNMeta -> Just m1) -> blockOn [m1]
-  VPolarityExpr pol -> case pol of
-    Unquantified -> solveMaxPolarityOp info [pArg1, pArg2, pRes]
-    _ -> Just $ throwError $ QuantifiedIfCondition ctx
-  _ -> Nothing
+solveIfCondPolarity info@(ctx, _) [pCond, pArg1, pArg2, pRes] = Just $ do
+  (forcedCondition, blockingMetas) <- forceHead (namedBoundCtxOf ctx) pCond
+  case forcedCondition of
+    FPolarityExpr pol -> case pol of
+      Unquantified -> solveMaxPolarityOp info [pArg1, pArg2, pRes]
+      _ -> throwError $ QuantifiedIfCondition ctx
+    _ -> return $ Stuck blockingMetas
 solveIfCondPolarity _ _ = Nothing
 
 --------------------------------------------------------------------------------
@@ -217,7 +218,7 @@ implPolarityOp p pol1 pol2 =
 --------------------------------------------------------------------------------
 -- Other
 
-getTypeClass :: (MonadCompile m) => InstanceGoal PolarityBuiltin -> m (PolarityRelation, Spine PolarityBuiltin)
+getTypeClass :: (MonadCompile m) => InstanceGoal PolarityBuiltin -> m (PolarityRelation, Args PolarityBuiltin)
 getTypeClass = \case
   (InstanceGoal _ (Right (PolarityRelation tc)) args) -> return (tc, args)
   _ -> compilerDeveloperError "Unexpected non-type-class instance argument found."

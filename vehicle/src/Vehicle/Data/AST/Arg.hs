@@ -39,6 +39,8 @@ instance HasRelevance (GenericArg expr) where
   relevanceOf = argRelevance
   setRelevance r Arg {..} = Arg {argRelevance = r, ..}
 
+type GenericArgs expr = [GenericArg expr]
+
 --------------------------------------------------------------------------------
 -- Patterns
 

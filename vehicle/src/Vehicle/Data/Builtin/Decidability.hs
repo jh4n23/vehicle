@@ -10,7 +10,6 @@ import Vehicle.Compile.Prelude (Expr (..), normAppList)
 import Vehicle.Data.Builtin.Core.BasicOperations
 import Vehicle.Data.Builtin.Core.Derived (DerivedFunction (..))
 import Vehicle.Data.Builtin.Interface
-import Vehicle.Data.Builtin.Interface.Blocked
 import Vehicle.Data.Builtin.Interface.Normalise
 import Vehicle.Data.Builtin.Interface.Print
 import Vehicle.Data.Builtin.Standard (Builtin, BuiltinConstructor (..), BuiltinFunction (..), BuiltinType (..))
@@ -281,18 +280,15 @@ instance PrintableBuiltin DecidabilityBuiltin where
 -- Normalisation
 
 instance NormalisableBuiltin DecidabilityBuiltin where
-  evalScheme = \case
+  evaluationScheme = \case
     StandardBuiltinFunction Iterate -> NonSimple evalIterate
     StandardBuiltinFunction FoldList -> NonSimple evalFoldList
+    DecidabilityBuiltinTypeClassOp {} -> TypeClassEval
     _ -> None
 
   blockingStatus b spine = case b of
     StandardBuiltinFunction Iterate -> functionBlockingStatus Iterate spine
     _ -> DoesNotReduce
-
-  isTypeClassOp = \case
-    DecidabilityBuiltinTypeClassOp {} -> True
-    _ -> False
 
   isCast p e = case e of
     DecidabilityBuiltinFunction BoolTensorToProp -> Just $ forceEvalSimpleBuiltin p e evalBoolTensorToProp

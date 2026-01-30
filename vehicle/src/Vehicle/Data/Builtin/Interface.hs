@@ -25,6 +25,9 @@ data Accessor expr v = Access
     mkExpr :: Construct expr v
   }
 
+idAccessor :: Accessor expr expr
+idAccessor = Access Just id
+
 --------------------------------------------------------------------------------
 -- Accessor classes for builtins
 --------------------------------------------------------------------------------

@@ -268,28 +268,28 @@ instance BuiltinHasForeach LossBuiltin where
 --------------------------------------------------------------------------------
 -- Normalisation
 
-instance HasTensorLiterals Value LossBuiltin where
+instance (HasBuiltinConstructor expr) => HasTensorLiterals expr LossBuiltin where
   tensorLiterals =
     [ Wrapper accessNatTensorLiteral,
       Wrapper accessRatTensorLiteral
     ]
 
-instance HasLiftableTensorOperations LossBuiltin where
+instance (HasBuiltinConstructor expr) => HasLiftableTensorOperations expr LossBuiltin where
   liftableTensorOp1s =
-    [ (getExpr accessNegRatTensor, evalNegRatTensor, IRatType)
+    [ (accessNegRatTensor, evalNegRatTensor, IRatType)
     ]
 
   liftableTensorOp2s =
-    [ (getExpr accessAddRatTensor, evalAddRatTensor, IRatType),
-      (getExpr accessMulRatTensor, evalMulRatTensor, IRatType),
-      (getExpr accessSubRatTensor, evalSubRatTensor, IRatType),
-      (getExpr accessDivRatTensor, evalDivRatTensor, IRatType),
-      (getExpr accessMinRatTensor, evalMinRatTensor, IRatType),
-      (getExpr accessMaxRatTensor, evalMaxRatTensor, IRatType)
+    [ (accessAddRatTensor, evalAddRatTensor, IRatType),
+      (accessMulRatTensor, evalMulRatTensor, IRatType),
+      (accessSubRatTensor, evalSubRatTensor, IRatType),
+      (accessDivRatTensor, evalDivRatTensor, IRatType),
+      (accessMinRatTensor, evalMinRatTensor, IRatType),
+      (accessMaxRatTensor, evalMaxRatTensor, IRatType)
     ]
 
-instance NormalisableBuiltin LossBuiltin where
-  evalScheme = \case
+instance NormalisableBuiltin Value LossBuiltin where
+  evaluationScheme b spine = case b of
     LossBuiltinFunction f -> case f of
       Add AddNat -> Simple evalAddNat
       Mul MulNat -> Simple evalMulNat
@@ -310,12 +310,8 @@ instance NormalisableBuiltin LossBuiltin where
       ConstTensor -> Simple evalConstTensor
       FoldList -> NonSimple evalFoldList
       MapList -> NonSimple evalMapList
-      SearchRatTensor {} -> None
-    _ -> None
-
-  blockingStatus = developerError "Blocking arguments not yet implemented for LossBuiltin"
-
-  isTypeClassOp _ = False
+      SearchRatTensor {} -> Unevaluable
+    _ -> Unevaluable
 
   isCast _ _ = Nothing
 

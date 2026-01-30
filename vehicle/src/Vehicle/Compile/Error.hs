@@ -184,7 +184,7 @@ data CompileError
   | UnmatchedRecord Provenance [FieldName] (Maybe (Identifier, RecordMatch))
   | -- Type checking errors
     forall builtin.
-    (Eq builtin, PrintableBuiltin builtin, NormalisableBuiltin builtin, Show builtin) =>
+    (Eq builtin, PrintableBuiltin builtin, NormalisableBuiltin Value builtin, Show builtin) =>
     TypingError (TypingError builtin)
   | -- Resource loading errors
     ResourcesNotProvided (NonEmpty MissingResource)

@@ -243,10 +243,10 @@ type family StrategyFor (tags :: Tags) a :: Strategy where
   -- Type-checking constraints --
   -------------------------------
   StrategyFor tags (ArgInsertionProblem builtin `In` NamedBoundCtx) = StrategyFor tags (Expr builtin `In` NamedBoundCtx)
-  StrategyFor tags (InstanceConstraint builtin `In` ConstraintContext builtin) = StrategyFor tags (Value builtin `In` NamedBoundCtx)
-  StrategyFor tags (UnificationConstraint builtin `In` ConstraintContext builtin) = StrategyFor tags (Value builtin `In` NamedBoundCtx)
-  StrategyFor tags (ApplicationConstraint builtin `In` ConstraintContext builtin) = StrategyFor tags (Value builtin `In` NamedBoundCtx)
-  StrategyFor tags (Constraint builtin `In` ConstraintContext builtin) = StrategyFor tags (Value builtin `In` NamedBoundCtx)
+  StrategyFor tags (InstanceConstraint builtin `In` ConstraintContext builtin) = StrategyFor tags (Expr builtin `In` NamedBoundCtx)
+  StrategyFor tags (UnificationConstraint builtin `In` ConstraintContext builtin) = StrategyFor tags (Expr builtin `In` NamedBoundCtx)
+  StrategyFor tags (ApplicationConstraint builtin `In` ConstraintContext builtin) = StrategyFor tags (Expr builtin `In` NamedBoundCtx)
+  StrategyFor tags (Constraint builtin `In` ConstraintContext builtin) = StrategyFor tags (Expr builtin `In` NamedBoundCtx)
   StrategyFor tags (InstanceCandidate builtin `In` BoundCtx (Type builtin)) = StrategyFor tags (Expr builtin `In` NamedBoundCtx)
   StrategyFor tags (MetaInfo builtin `In` NoCtx) = StrategyFor tags (Value builtin `In` NamedBoundCtx)
   --------------------------
@@ -816,7 +816,7 @@ prettyConstraint ctx constraint =
       ]
 
 instance
-  (PrettyUsing rest (Value builtin `In` NamedBoundCtx)) =>
+  (PrettyUsing rest (Expr builtin `In` NamedBoundCtx)) =>
   PrettyUsing rest (UnificationConstraint builtin `In` ConstraintContext builtin)
   where
   prettyUsing (Unify _ e1 e2, ctx) = do
@@ -825,8 +825,7 @@ instance
     prettyConstraint ctx (e1' <+> "~" <+> e2')
 
 instance
-  ( PrettyUsing rest (Value builtin `In` NamedBoundCtx),
-    PrettyUsing rest (Expr builtin `In` NamedBoundCtx)
+  ( PrettyUsing rest (Expr builtin `In` NamedBoundCtx)
   ) =>
   PrettyUsing rest (InstanceConstraint builtin `In` ConstraintContext builtin)
   where

@@ -14,7 +14,6 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
 import Vehicle.Compile.Error
-import Vehicle.Compile.Normalise.Quote qualified as Quote
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
 import Vehicle.Compile.Type.Constraint.UnificationSolver (UnificationResult (..), unify)
@@ -27,7 +26,6 @@ import Vehicle.Compile.Type.Monad
 import Vehicle.Compile.Type.Monad.Class
 import Vehicle.Data.Builtin.Interface.Print (PrintableBuiltin)
 import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin)
-import Vehicle.Data.Code.Value
 import Vehicle.Data.Variable.Bound.Context.Generic
 
 --------------------------------------------------------------------------------
@@ -152,7 +150,7 @@ updateSolutionMeta constraint = do
   metaCtx <- metaVariableCtx <$> getTypeCheckerDeclState @builtin
   newMeta <- findUltimateUnsolvedMeta metaCtx originalMeta
   -- This is a hack that should disappear when we get records?
-  updateMetaType newMeta (Quote.unnormalise @(Value builtin) @(Expr builtin) 0 $ goalExpr $ instanceGoal constraint)
+  updateMetaType newMeta (goalExpr $ instanceGoal constraint)
   return $ constraint {instanceSolution = newMeta}
 
 --------------------------------------------------------------------------------
