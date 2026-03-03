@@ -102,7 +102,7 @@ lookupParentTensorVariables ::
 lookupParentTensorVariables sliceVars = do
   ctx <- getNestedVariableCtx
   let result = findCorrespondingTensorSliceVariables ctx sliceVars
-  return $ Set.fromList $ fmap (coerce . nestedStartingVariable) result
+  return $ Set.fromList $ fmap (coerce . nestedStartingVariable . snd) result
 
 lookupParentTensorVariable ::
   (MonadReadableTensorBoundContext m, SliceVariableLike variable) =>
@@ -111,21 +111,20 @@ lookupParentTensorVariable ::
 lookupParentTensorVariable var = do
   ctx <- getNestedVariableCtx
   -- TODO turn this into a binary search for added efficiency?
-  case findCorrespondingTensorSliceVariables ctx (Set.singleton (toSliceVar var)) of
-    [v] -> return v
+  case findCorrespondingVariableInOriginalCtx ctx (Set.singleton $ toLv var) of
+    [(_, Just v)] -> return v
     _ -> developerError "Missing variable"
 
-lookupSliceVariable ::
+lookupVariableInNestedCtx ::
   (MonadReadableTensorBoundContext m) =>
   Lv ->
-  m (Maybe (NestedSliceVariable, SliceVariable))
-lookupSliceVariable lv = do
+  m (Lv, Maybe (NestedSliceVariable, SliceVariable))
+lookupVariableInNestedCtx lv = do
   ctx <- getNestedVariableCtx
-  let sliceVar = SliceVariable lv
   -- TODO turn this into a binary search for added efficiency?
-  return $ case findCorrespondingTensorSliceVariables ctx (Set.singleton sliceVar) of
-    [parentVar] -> Just (parentVar, sliceVar)
-    _ -> Nothing
+  return $ case findCorrespondingVariableInOriginalCtx ctx (Set.singleton lv) of
+    [(originalCtxLv, maybeParentVar)] -> (originalCtxLv, fmap (,SliceVariable lv) maybeParentVar)
+    _ -> developerError "could not find variable in nested context"
 
 lookupTensorVariableShrunkenLv ::
   (MonadReadableTensorBoundContext m, TensorVariableLike variable) =>

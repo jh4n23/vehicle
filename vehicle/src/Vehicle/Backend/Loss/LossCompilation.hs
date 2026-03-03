@@ -143,10 +143,10 @@ convertBoundVar ::
 convertBoundVar lv = \case
   _ : _ -> unexpectedExprError currentPass "bound function variables"
   [] -> do
-    maybeVars <- lookupSliceVariable lv
+    maybeVars <- lookupVariableInNestedCtx lv
     case maybeVars of
       Nothing -> return $ VBoundVar lv []
-      Just (parentVar, sliceVar)
+      Just (x, parentVar, sliceVar)
         | toLv parentVar == toLv sliceVar -> return $ VBoundVar lv []
         | otherwise -> do
             let indices = findSliceIndices parentVar sliceVar

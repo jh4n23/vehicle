@@ -27,19 +27,21 @@ instance Pretty NestedTensorVariableCtx where
 emptyNestedCtx :: NestedTensorVariableCtx
 emptyNestedCtx = NestedTensorVariableCtx mempty mempty
 
-findCorrespondingTensorSliceVariables ::
+findCorrespondingVariableInOriginalCtx ::
   NestedTensorVariableCtx ->
-  Set SliceVariable ->
-  [NestedSliceVariable]
-findCorrespondingTensorSliceVariables (NestedTensorVariableCtx wholeCtx _) vars = do
+  Set Lv ->
+  [(Lv, Maybe NestedSliceVariable)]
+findCorrespondingVariableInOriginalCtx (NestedTensorVariableCtx wholeCtx _) vars = do
   let sortedVarList = sortBy (comparing Down) (Set.toList vars)
-  go wholeCtx sortedVarList
+  go 0 wholeCtx sortedVarList
   where
-    go :: GenericBoundCtx (GenericBinder (), Maybe NestedSliceVariable) -> [SliceVariable] -> [NestedSliceVariable]
-    go [] _ = []
-    go _ [] = []
-    go ((_binder, maybeTensorVar) : ctx) (v : vs) = case maybeTensorVar of
-      Nothing -> go ctx (v : vs)
+    go :: Lv -> GenericBoundCtx (GenericBinder (), Maybe NestedSliceVariable) -> [Lv] -> [(Lv, Maybe NestedSliceVariable)]
+    go _ [] _ = []
+    go _ _ [] = []
+    go lv ((_binder, maybeTensorVar) : ctx) (v : vs) = case maybeTensorVar of
+      Nothing
+        | lv == toLv v -> (lv, Nothing) : go (lv + 1) ctx (v : vs)
+        | otherwise -> go (lv + 1) ctx (v : vs)
       Just tensorVar -> do
         let startPoint = toLv tensorVar
         let endPoint = startPoint + Lv (numberOfSliceVariablesIn $ shapeOf tensorVar)
@@ -47,10 +49,10 @@ findCorrespondingTensorSliceVariables (NestedTensorVariableCtx wholeCtx _) vars 
           then developerError "Incorrectly sorted slice variables"
           else
             if toLv v < startPoint
-              then go ctx (v : vs)
+              then go (lv + 1) ctx (v : vs)
               else do
                 let newVars = dropWhile (\u -> toLv u >= startPoint) vs
-                tensorVar : go ctx newVars
+                (lv, Just tensorVar) : go (lv + 1) ctx newVars
 
 appendNonTensorVariableToNestedCtx :: GenericBinder () -> NestedTensorVariableCtx -> NestedTensorVariableCtx
 appendNonTensorVariableToNestedCtx binder (NestedTensorVariableCtx ctx nameCtx) = do

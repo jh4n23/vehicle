@@ -6,6 +6,7 @@ where
 import Control.Monad (foldM, forM)
 import Control.Monad.Except (MonadError (..), runExceptT)
 import Control.Monad.State (MonadState (..), evalStateT)
+import Data.Bifunctor (Bifunctor (..))
 import Data.Coerce (coerce)
 import Data.Foldable (foldrM)
 import Data.List.NonEmpty (NonEmpty (..))
@@ -21,6 +22,7 @@ import Vehicle.Compile.LowerNot (lowerNot, negateQuantifierBody)
 import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Normalise.Quote (Quote (..))
 import Vehicle.Compile.Prelude
+import Vehicle.Compile.Print (prettyFriendly, prettyVerbose)
 import Vehicle.Compile.Unblock (MonadPurify, UnblockingActions (..), tryPurifyAssertion, unblockBoolExpr)
 import Vehicle.Data.Assertion (NormalisedRelation (..), Relation (..), comparisonToAssertion)
 import Vehicle.Data.Bound
@@ -38,7 +40,7 @@ import Vehicle.Data.DifferentiableLogic (TensorDifferentiableLogicField (..))
 import Vehicle.Data.MaybeTrivial
 import Vehicle.Data.Tensor (pattern ZeroDimTensor)
 import Vehicle.Data.Tensor.Traversal
-import Vehicle.Data.Variable.Bound.Context.Generic (BoundCtx)
+import Vehicle.Data.Variable.Bound.Context.Generic (BoundCtx, toNamedBoundCtx)
 import Vehicle.Data.Variable.Bound.Context.Name
 import Vehicle.Data.Variable.Bound.Context.Tensor
 import Vehicle.Data.Variable.Bound.Level
@@ -57,14 +59,14 @@ compileQuantifier (q, args) = do
     NonTrivial partitions -> do
       let disjunctedPartitions = partitionsToDisjuncts partitions
       DisjunctAll (v :| vs) <- traverse checkFinalPartitionUnconstrained disjunctedPartitions
-      finalValue <- foldrM orLossValue v vs
+      OC finalValue <- foldrM orLossValue v vs
       logDebugM MaxDetail $ prettyFriendlyInCtx finalValue
       return finalValue
 
 checkFinalPartitionUnconstrained ::
   (MonadLogic m) =>
   Partition ->
-  m (Value LossBuiltin)
+  m OriginalCtxValue
 checkFinalPartitionUnconstrained = \case
   (Nothing, Nothing) -> developerError "Found unexpected trivial partition"
   (Nothing, Just value) -> return value
@@ -111,6 +113,7 @@ compileExists (QuantifyRatTensorArgs dims binder closure) =
           userTensorVar <- lookupNestedTensorVariable $ UserTensorVariable $ TensorVariable $ SliceVariable lv
           xs <- traverse (compileConstraints finalCtx dims binder userTensorVar) (partitionsToDisjuncts partitions)
           disjunctMaybeTrivialPartitions xs
+
     return result
 
 compileConstraints ::
@@ -136,22 +139,22 @@ compileConstraints finalCtx dims binder var (maybeConstraints, maybeRemainder) =
         return constraints
 
     -- Extract the remaining body of the quantifier
-    remaindingBody <- case maybeRemainder of
-      Just remainder -> return remainder
+    remainingBody <- case maybeRemainder of
+      Just (OC remainder) -> return remainder
       Nothing -> do
         (ident, _p) <- getDeclProvenance
         logWarning $ BoundsOnlyQuantifier (nameOf ident) varName
         getLogicField TruthityElement
 
     logDebugM MidDetail $ do
-      remainderDoc <- prettyFriendlyInCtx remaindingBody
+      remainderDoc <- prettyFriendlyInCtx remainingBody
       return $
         "remaining-expression:"
           <> lineIndent remainderDoc
 
     -- Reform the closure around the body. Note that this needs to be done
     -- in the final context (i.e. without any reference to slice variables!)
-    let lossBody = quote mempty (1 + boundCtxLv finalCtx) remaindingBody
+    let lossBody = quote mempty (1 + boundCtxLv finalCtx) remainingBody
     let finalEnv = boundContextToEnv finalCtx
     let remainder = Closure finalEnv lossBody
 
@@ -191,7 +194,7 @@ compileSearch ::
   VBinder Builtin ->
   Closure LossBuiltin ->
   Domain TensorValue ->
-  m (Value LossBuiltin)
+  m OriginalCtxValue
 compileSearch varName dims binder closure (Domain lowerBound upperBound) = do
   -- Convert the binder and the dimensions.
   lossBinder <- traverse convertType binder
@@ -219,7 +222,7 @@ compileSearch varName dims binder closure (Domain lowerBound upperBound) = do
               searchPredicate = lossPredicate
             }
   minimise <- getLogicDirection
-  return $ VBuiltin (LossBuiltinFunction $ SearchRatTensor varName minimise) spine
+  return $ OC $ VBuiltin (LossBuiltinFunction $ SearchRatTensor varName minimise) spine
 
 findTensorBounds ::
   forall m.
@@ -238,15 +241,17 @@ findTensorBounds parentVar parentVarShape constraints =
     go allBounds var = do
       result <- forM allBounds $ \(bounds, maybeTree) ->
         case maybeTree of
-          Nothing -> return $ DisjunctAll [(bounds, maybeTree)]
+          Nothing ->
+            return $ DisjunctAll [(bounds, maybeTree)]
           Just tree -> do
             let tensorVar = TensorVariable $ toSliceVar parentVar
             let indices = findSliceIndices parentVar var
             let varInfo = VariableInfo tensorVar parentVarShape indices
             disjunctedBoundsAndRemainders <- findAllBounds (findVarBound var varInfo) tree
+            let finalBoundsAndRemainders = fmap (first (andBounds bounds)) disjunctedBoundsAndRemainders
             case childVariablesOf var of
-              Nothing -> return disjunctedBoundsAndRemainders
-              Just childVariables -> foldM go disjunctedBoundsAndRemainders childVariables
+              Nothing -> return finalBoundsAndRemainders
+              Just childVariables -> foldM go finalBoundsAndRemainders childVariables
       return $ disjunctDisjuncts result
 
 noQuantifierDomainError ::
@@ -281,11 +286,11 @@ type MonadDomain m =
   ( MonadLogic m
   )
 
-orLossValue :: (MonadDomain m) => Value LossBuiltin -> Value LossBuiltin -> m (Value LossBuiltin)
-orLossValue e1 e2 = convertOr $ TensorOp2Args IDimNil e1 e2
+orLossValue :: (MonadDomain m) => OriginalCtxValue -> OriginalCtxValue -> m OriginalCtxValue
+orLossValue (OC e1) (OC e2) = OC <$> convertOr (TensorOp2Args IDimNil e1 e2)
 
-andLossValue :: (MonadDomain m) => Value LossBuiltin -> Value LossBuiltin -> m (Value LossBuiltin)
-andLossValue e1 e2 = convertAnd $ TensorOp2Args IDimNil e1 e2
+andLossValue :: (MonadDomain m) => OriginalCtxValue -> OriginalCtxValue -> m OriginalCtxValue
+andLossValue (OC e1) (OC e2) = OC <$> convertAnd (TensorOp2Args IDimNil e1 e2)
 
 notConstraint :: (MonadDomain m) => UserVariableConstraint -> m (BooleanExpr UserVariableConstraint)
 notConstraint (NormalisedRelation rel expr) = do
@@ -298,12 +303,14 @@ notConstraint (NormalisedRelation rel expr) = do
       let greater = NormalisedRelation OLe negExpr
       Disjunct $ DisjunctAll [Query less, Query greater]
 
-type Partition = (Maybe UserVariableConstraintTree, Maybe (Value LossBuiltin))
+newtype OriginalCtxValue = OC (Value LossBuiltin)
+
+type Partition = (Maybe UserVariableConstraintTree, Maybe OriginalCtxValue)
 
 notPartition :: (MonadDomain m) => VDims LossBuiltin -> Partition -> m Partition
 notPartition dims (constraintTree, value) = do
   notConstraintTree <- traverse (traverse notConstraint) constraintTree
-  notValue <- traverse (convertNot . TensorOp1Args dims) value
+  notValue <- traverse (\(OC u) -> OC <$> convertNot (TensorOp1Args dims u)) value
   return (fmap flattenBoolExpr notConstraintTree, notValue)
 
 andPartition :: (MonadDomain m) => Partition -> Partition -> m Partition
@@ -312,13 +319,15 @@ andPartition (c1, v1) (c2, v2) = do
   v <- unionMaybeWithM andLossValue v1 v2
   return (c, v)
 
-newtype Partitions = Partitions (Map (Maybe UserVariableConstraintTree) (Maybe (Value LossBuiltin)))
+newtype Partitions = Partitions (Map (Maybe UserVariableConstraintTree) (Maybe OriginalCtxValue))
 
 singletonConstrainedPartition :: UserVariableConstraint -> Partitions
 singletonConstrainedPartition constraint = Partitions $ Map.singleton (Just (Query constraint)) Nothing
 
-singletonUnconstrainedPartition :: Value LossBuiltin -> Partitions
-singletonUnconstrainedPartition unconstrained = Partitions $ Map.singleton Nothing (Just unconstrained)
+singletonUnconstrainedPartition :: (MonadDomain m) => Value LossBuiltin -> m Partitions
+singletonUnconstrainedPartition unconstrained = do
+  originCtxValue <- convertToOriginalCtx unconstrained
+  return $ Partitions $ Map.singleton Nothing (Just originCtxValue)
 
 singletonPartition :: Partition -> Partitions
 singletonPartition (tree, value) = Partitions $ Map.singleton tree value
@@ -368,6 +377,50 @@ unblockingActions =
     { unblockRatTensorBoundVar = \lv -> return $ VBoundVar lv [],
       unblockNetworkApp = \ident args -> return $ VFreeVar ident (mkExpr accessSpine args)
     }
+
+convertToOriginalCtx :: forall m. (MonadDomain m) => Value LossBuiltin -> m OriginalCtxValue
+convertToOriginalCtx value = OC <$> go value
+  where
+    go :: Value LossBuiltin -> m (Value LossBuiltin)
+    go = \case
+      VUniverse l -> return $ VUniverse l
+      VMeta m spine -> VMeta m <$> goSpine spine
+      VFreeVar v spine -> VFreeVar v <$> goSpine spine
+      VBuiltin b spine -> VBuiltin b <$> goSpine spine
+      VBoundVar v spine -> goBoundVar v =<< goSpine spine
+      VPi {} -> unsupportedError "VPi"
+      VLam {} -> unsupportedError "VLam"
+      VRecord ident fields ->
+        VRecord ident <$> traverse go fields
+      VRecordAcc recordType record fieldName spine ->
+        VRecordAcc <$> go recordType <*> go record <*> pure fieldName <*> goSpine spine
+
+    goSpine :: Spine LossBuiltin -> m (Spine LossBuiltin)
+    goSpine = traverseSpine go
+
+    goBoundVar :: Lv -> Spine LossBuiltin -> m (Value LossBuiltin)
+    goBoundVar lv spine = do
+      (originalLv, maybeParentVar) <- lookupVariableInNestedCtx _
+      case maybeParentVar of
+        Nothing -> return $ VBoundVar originalLv spine
+        Just (parentVar, sliceVar) -> do
+          let indices = findSliceIndices parentVar sliceVar
+          case spine of
+            _ : _ -> developerError "tensor variable being used as a function"
+            [] -> do
+              let mkAt i u =
+                    mkExpr accessAtTensor $
+                      AtTensorArgs
+                        { atType = _,
+                          atFirstDim = _,
+                          atRemainingDims = _,
+                          atTensor = u,
+                          atIndex = IIndexLiteral i
+                        }
+              return $ foldr mkAt (VBoundVar originalLv []) indices
+
+    unsupportedError :: Doc a -> b
+    unsupportedError b = developerError $ "lifting of" <+> b <+> "to original context not currently implemented"
 
 --------------------------------------------------------------------------------
 -- Search algorithm
@@ -459,7 +512,7 @@ compileNonBoundComparison ::
   m (MaybeTrivial Partitions)
 compileNonBoundComparison args = do
   value <- convertRatTensorPointwiseComparison args
-  return $ NonTrivial $ singletonUnconstrainedPartition value
+  NonTrivial <$> singletonUnconstrainedPartition value
 
 -- | Unblocking a boolean value is a little complicated.
 -- If an expression cannot be immediately compiled to constriants, we have two
@@ -482,7 +535,7 @@ unblockBoolValue value = do
         then return maybePartitions
         else do
           lossValue <- convertBoolTensor value
-          return $ NonTrivial $ singletonUnconstrainedPartition lossValue
+          NonTrivial <$> singletonUnconstrainedPartition lossValue
 
 --------------------------------------------------------------------------------
 -- Comparison purification
@@ -531,10 +584,10 @@ purifyNetworkApp ident _spine = throwError $ ContainsNetwork ident
 
 purifyBoundVar :: (MonadPurifyAssertion m) => Lv -> m (Value Builtin)
 purifyBoundVar lv = do
-  maybeUserVars <- lookupSliceVariable lv
+  maybeUserVars <- lookupVariableInNestedCtx lv
   case maybeUserVars of
     Nothing -> return $ VBoundVar lv []
-    Just (tensorVar, sliceVar) -> do
+    Just (u, tensorVar, sliceVar) -> do
       let userTensorVar = coerce $ toLv tensorVar
       let userSliceVar = coerce sliceVar
       seenUserVars <- get
@@ -610,8 +663,8 @@ compileRatTensorVar ::
   Lv ->
   m (Maybe (LinearExpr SliceVariable TensorValue))
 compileRatTensorVar dims lv = do
-  maybeSliceVar <- lookupSliceVariable lv
-  forM maybeSliceVar $ \(_tensorVar, sliceVar) -> do
+  maybeSliceVar <- lookupVariableInNestedCtx lv
+  forM maybeSliceVar $ \(_, _tensorVar, sliceVar) -> do
     zeroTensor <- evalConstTensor $ ConstTensorArgs IRatType (IRatLiteral 0) dims
     return $ singletonVarExpr (TensorValue dims zeroTensor) sliceVar
 
