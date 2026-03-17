@@ -37,9 +37,9 @@ import Vehicle.Backend.Prelude
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Resource (NetworkName)
 import Vehicle.Compile.Type.Core
+import Vehicle.Compile.Type.Meta.Variable
 import Vehicle.Data.Bound (UnboundedIndices)
-import Vehicle.Data.Builtin.Interface.Normalise (NormalisableBuiltin)
-import Vehicle.Data.Builtin.Interface.Print
+import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin)
 import Vehicle.Data.Builtin.Linearity
 import Vehicle.Data.Builtin.Polarity
 import Vehicle.Data.Builtin.Standard.Core
@@ -91,7 +91,7 @@ data RelevantUseOfIrrelevantVariableError builtin = RelevantUseOfIrrelevantVaria
 data FunctionTypeMismatchError builtin = FunctionTypeMismatchError
   { _ctx :: NamedBoundCtx,
     originalFunction :: Expr builtin,
-    currentExpectedType :: Expr builtin,
+    currentExpectedType :: Value builtin,
     currentUncheckedArgs :: [Arg builtin]
   }
   deriving (Show)
@@ -103,9 +103,10 @@ data FailedUnificationConstraintsError builtin = FailedUnificationConstraintsErr
   deriving (Show)
 
 data FailedInstanceConstraintError builtin = FailedInstanceConstraintError
-  { _freeCtx :: FreeCtx builtin,
-    failedConstraint :: WithContext (InstanceConstraint builtin),
-    exploredCandidates :: [(WithContext (InstanceCandidate builtin), UnAnnDoc)]
+  { failedInstanceFreeCtx :: FreeCtx builtin,
+    failedInstanceMetaCtx :: MetaVariableContext builtin,
+    failedInstanceConstraint :: WithContext (InstanceConstraint builtin),
+    failedInstanceExploredCandidates :: [(WithContext (InstanceCandidate builtin), UnAnnDoc)]
   }
   deriving (Show)
 
@@ -184,7 +185,7 @@ data CompileError
   | UnmatchedRecord Provenance [FieldName] (Maybe (Identifier, RecordMatch))
   | -- Type checking errors
     forall builtin.
-    (Eq builtin, PrintableBuiltin builtin, NormalisableBuiltin Value builtin, Show builtin) =>
+    (TypableBuiltin builtin, Show builtin) =>
     TypingError (TypingError builtin)
   | -- Resource loading errors
     ResourcesNotProvided (NonEmpty MissingResource)
@@ -192,17 +193,17 @@ data CompileError
   | UnsupportedResourceFormat DeclProvenance ExternalResource String
   | UnableToParseResource DeclProvenance ExternalResource String
   | -- Unsupported networks
-    NetworkTypeHasVariableSizeTensor DeclProvenance (GluedType Builtin) (VType Builtin) InputOrOutput
-  | NetworkTypeHasImplicitSizeTensor DeclProvenance (GluedType Builtin) Identifier InputOrOutput
+    NetworkTypeHasVariableSizeTensor DeclProvenance (Type Builtin) (VType Builtin) InputOrOutput
+  | NetworkTypeHasImplicitSizeTensor DeclProvenance (Type Builtin) Identifier InputOrOutput
   | -- Unsupported datasets
-    DatasetVariableSizeTensor DeclProvenance (GluedType Builtin) (VType Builtin)
+    DatasetVariableSizeTensor DeclProvenance (Type Builtin) (VType Builtin)
   | DatasetDimensionSizeMismatch DeclProvenance FilePath Int Int Int
-  | DatasetDimensionsMismatch DeclProvenance FilePath (GluedExpr Builtin) TensorShape
-  | DatasetTypeMismatch DeclProvenance FilePath (GluedType Builtin) (VType Builtin) (Doc Void)
+  | DatasetDimensionsMismatch DeclProvenance FilePath (Maybe Int) TensorShape
+  | DatasetTypeMismatch DeclProvenance FilePath (Type Builtin) (VType Builtin) (Doc Void)
   | DatasetInvalidIndex DeclProvenance FilePath Int Int
   | DatasetInvalidNat DeclProvenance FilePath Int
   | -- Unsupported parameters
-    ParameterTypeVariableSizeIndex DeclProvenance (GluedType Builtin) (Value Builtin)
+    ParameterTypeVariableSizeIndex DeclProvenance (Type Builtin) (Value Builtin)
   | ParameterTypeInferableParameterIndex DeclProvenance Identifier
   | ParameterValueUnparsable DeclProvenance String BuiltinType
   | ParameterValueInvalidIndex DeclProvenance Int Int

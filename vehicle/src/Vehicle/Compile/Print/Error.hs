@@ -20,8 +20,6 @@ import Vehicle.Compile.Print.Error.Typing
 import Vehicle.Data.Builtin.Linearity
 import Vehicle.Data.Builtin.Polarity
 import Vehicle.Data.Builtin.Standard.Core
-import Vehicle.Data.Code.Interface (getDimsExprs)
-import Vehicle.Data.Code.TypedView
 import Vehicle.Data.Code.Value
 import Vehicle.Data.DifferentiableLogic (TensorDifferentiableLogicField (..))
 import Vehicle.Data.Tensor (TensorIndices)
@@ -474,7 +472,7 @@ formatCompileError = \case
             <> "is not a constant.",
         fix = Just "make sure the dimensions of the dataset are all constants."
       }
-  DatasetDimensionsMismatch (ident, p) file expectedType actualDims ->
+  DatasetDimensionsMismatch (ident, p) file expectedDimensions actualDims ->
     VehicleError
       { provenance = Just p,
         problem =
@@ -483,7 +481,7 @@ formatCompileError = \case
             <> "."
             <> line
             <> "According to the specification it should be"
-              <+> maybe "?" pretty (dimensionsOf (normalised expectedType))
+              <+> maybe "?" pretty expectedDimensions
             <> "-dimensional"
               <+> "but was actually found to be"
               <+> pretty (length actualDims)
@@ -493,19 +491,6 @@ formatCompileError = \case
             <> ".",
         fix = Just $ datasetDimensionsFix "dimensions" ident file
       }
-    where
-      dimensionsOf :: VType Builtin -> Maybe Int
-      dimensionsOf t = case toTypeValue t of
-        VRatTensorType dims -> dimLength dims
-        VBoolTensorType dims -> dimLength dims
-        VNatTensorType dims -> dimLength dims
-        VIndexTensorType _ dims -> dimLength dims
-        VListType tElem -> (+ 1) <$> dimensionsOf tElem
-        VVectorType tElem _dims -> (+ 1) <$> dimensionsOf tElem
-        _ -> Just 0
-
-      dimLength :: Value Builtin -> Maybe Int
-      dimLength dims = either (const Nothing) (Just . length) (getDimsExprs dims)
   DatasetDimensionSizeMismatch (ident, p) file expectedSize actualSize wrongDimensionIndex ->
     VehicleError
       { provenance = Just p,

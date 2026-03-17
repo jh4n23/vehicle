@@ -36,6 +36,14 @@ instance TypableBuiltin Builtin where
     Right (TypeClass c) -> c `elem` ([IsTensorType, HasNatLits, HasRatLits, HasVecLits] :: [TypeClass])
     _ -> False
 
+  coercionArgs b = case b of
+    BuiltinCast FromNat {} -> Just $ \args -> argExpr $ last args
+    BuiltinCast FromRat {} -> Just $ \args -> argExpr $ last args
+    TypeClassOp FromNatTC {} -> Just $ \args -> argExpr $ last args
+    TypeClassOp FromRatTC {} -> Just $ \args -> argExpr $ last args
+    TypeClassOp VecLiteralTC {} -> Just $ \args -> normAppList (Builtin mempty b) args
+    _ -> Nothing
+
 -- | Return the type of the provided builtin.
 isStandardConstructor :: Builtin -> Bool
 isStandardConstructor = \case
@@ -49,9 +57,13 @@ isStandardConstructor = \case
   DerivedFunction {} -> False
 
 -- | Return the type of the provided builtin.
-typeStandardBuiltin :: (MonadTypeChecker Builtin m) => Provenance -> Builtin -> m (Type Builtin)
+typeStandardBuiltin :: (MonadFreeContext Builtin m) => Provenance -> Builtin -> m (Type Builtin)
 typeStandardBuiltin p = \case
-  DerivedFunction f -> getDeclType (Proxy @Builtin) (identifierOf f)
+  DerivedFunction f -> do
+    decl <- getDeclEntry (Proxy @Builtin) (identifierOf f)
+    case decl of
+      DefFunction _ _ _ t _ -> return t
+      _ -> developerError "non-function definition provided for builtin"
   BuiltinType s -> return $ fromDSL p $ typeOfBuiltinType s
   BuiltinConstructor c -> return $ fromDSL p $ typeOfBuiltinConstructor c
   BuiltinFunction f -> return $ fromDSL p $ typeOfBuiltinFunction f

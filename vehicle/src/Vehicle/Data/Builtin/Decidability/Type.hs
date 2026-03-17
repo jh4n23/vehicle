@@ -10,7 +10,6 @@ import Vehicle.Compile.Error
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Type.Core
 import Vehicle.Compile.Type.Monad
-import Vehicle.Compile.Type.Monad.Class (getDeclType)
 import Vehicle.Compile.Type.System
 import Vehicle.Data.Builtin.Decidability
 import Vehicle.Data.Builtin.Interface.Type
@@ -23,7 +22,7 @@ import Vehicle.Data.Builtin.Standard
   )
 import Vehicle.Data.Code.DSL
 import Vehicle.Data.DSL
-import Vehicle.Data.Variable.Free.Context (MonadFreeContext (..))
+import Vehicle.Data.Variable.Free.Context (MonadFreeContext (..), getDeclType)
 import Prelude hiding (iterate, pi)
 
 --------------------------------------------------------------------------------
@@ -38,6 +37,8 @@ instance TypableBuiltin DecidabilityBuiltin where
   isCastConstraint e = case e of
     Right (DecidabilityBuiltinTypeClass (HasTensorTypeClassField FieldFromBoolTensorLiteral)) -> True
     _ -> False
+
+  coercionArgs = const Nothing
 
 isDecidabilityConstructor :: DecidabilityBuiltin -> Bool
 isDecidabilityConstructor = \case

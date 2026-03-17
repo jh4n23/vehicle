@@ -18,17 +18,19 @@ import Vehicle.Compile.Error
 import Vehicle.Compile.ExpandResources.Core (lookupNetworkInfo)
 import Vehicle.Compile.LiftIf (unfoldIf)
 import Vehicle.Compile.LowerNot (lowerNot)
-import Vehicle.Compile.Normalise.NBE
+import Vehicle.Compile.Normalise.NBE (extendClosureWithBound, forceValue)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Compile.Rational.LinearExpr (LinearityError (..), compileLinearAssertion)
-import Vehicle.Compile.Unblock (UnblockingActions (..))
-import Vehicle.Compile.Unblock qualified as Unblocking
+import Vehicle.Compile.TypedView
+import Vehicle.Compile.TypedView.Unblock (UnblockingActions (..))
+import Vehicle.Compile.TypedView.Unblock qualified as Unblocking
 import Vehicle.Compile.Variable (createUserVar)
-import Vehicle.Data.Builtin.Interface.Normalise (evalAtTensor, unoptimisedEvalReduceAndTensor)
+import Vehicle.Data.Builtin.Interface (BuiltinHasBoolLiterals (accessCompareRatTensorReducedBuiltin), applyAccessor)
+import Vehicle.Data.Builtin.Interface.Normalise (forceDims, forceDimsHead, unforcedBuiltinApp)
 import Vehicle.Data.Builtin.Standard
+import Vehicle.Data.Builtin.Standard.Normalise (mkDims)
 import Vehicle.Data.Code.Interface
-import Vehicle.Data.Code.TypedView
 import Vehicle.Data.Code.Value
 import Vehicle.Data.MaybeTrivial
 import Vehicle.Data.Variable.Bound.Context.Name (getNameContext, prettyFriendlyInCtx)
@@ -40,19 +42,22 @@ import Prelude hiding (Applicative (..))
 
 eliminateExists ::
   (MonadQueryStructure m) =>
-  QuantifyRatTensorArgs (Value Builtin) (Closure Builtin) ->
+  QuantifyRatTensorArgs (Value Builtin) ->
   m (MaybeTrivial Partitions)
-eliminateExists (QuantifyRatTensorArgs _ binder (Closure env body)) = do
+eliminateExists (QuantifyRatTensorArgs _ fn) = do
+  let (binder, closure) = accessQuantifierLambda fn
   let varName = getBinderName binder
   let subpassDoc = "elimination of existential quantifier over" <+> quotePretty varName
   logCompilerSection2 MidDetail subpassDoc $ do
-    -- Get the shape and name of the quantified variable
-    namedCtx <- getNameContext
+    -- Extract the shape of the user variable
     propertyProv <- asks propertyProvenance
-    (userVarName, userVarShapeValue) <- createUserVar propertyProv namedCtx binder
-    userVarShape <- case getDims userVarShapeValue of
+    userVarShapeValue <- createUserVar propertyProv binder
+    forcedDims <- forceDims userVarShapeValue
+    userVarShape <- case forcedDims of
       Just shape -> return shape
-      _ -> throwError $ VariableSizeTensorQuantification propertyProv namedCtx binder userVarShapeValue
+      _ -> do
+        namedCtx <- getNameContext
+        throwError $ VariableSizeTensorQuantification propertyProv namedCtx binder userVarShapeValue
 
     -- Update the global context
     globalCtx <- get
@@ -60,8 +65,7 @@ eliminateExists (QuantifyRatTensorArgs _ binder (Closure env body)) = do
     put newGlobalCtx
 
     -- Normalise the expression
-    let newEnv = extendEnvWithBound (toLv userVar) binder env
-    normExpr <- eval (Just userVarName : namedCtx) newEnv body
+    normExpr <- extendClosureWithBound binder closure
 
     -- Recursively compile the expression.
     (partitions, networkInputEqualities) <-
@@ -93,30 +97,32 @@ compileBoolExpr ::
   (MonadQueryStructure m, MonadWriter [Value Builtin] m) =>
   Value Builtin ->
   m (MaybeTrivial Partitions)
-compileBoolExpr expr = do
-  showEntry expr
-  showExit =<< case toBoolValue expr of
-    ----------------
-    -- Base cases --
-    ----------------
-    VBoolLiteral b -> return $ Trivial b
-    VCompareRatTensor (op, args) -> purifyAndCompileAssertion op args
-    VQuantifyRatTensor (Forall, _) -> throwError catchableUnsupportedAlternatingQuantifiersError
-    ---------------------
-    -- Recursive cases --
-    ---------------------
-    VNot arg -> compileBoolExpr =<< lowerNot arg
-    VBoolIf args -> compileBoolExpr =<< unfoldIf args
-    VAnd (TensorOp2Args _dims x y) -> andTrivial andPartitions <$> compileBoolExpr x <*> compileBoolExpr y
-    VOr (TensorOp2Args _dims x y) -> orTrivial orPartitions <$> compileBoolExpr x <*> compileBoolExpr y
-    VQuantifyRatTensor (Exists, args) -> eliminateExists args
-    VCompareNat {} -> unblockAndRec expr
-    VCompareIndex {} -> unblockAndRec expr
-    VReduceAndTensor {} -> unblockAndRec expr
-    VReduceOrTensor {} -> unblockAndRec expr
-    VBoolAt {} -> unblockAndRec expr
+compileBoolExpr value = do
+  showEntry value
+  showExit =<< do
+    forcedValue <- forceValue value
+    case toBoolValue forcedValue of
+      ----------------
+      -- Base cases --
+      ----------------
+      VBoolLiteral b -> return $ Trivial b
+      VCompareRatTensor (op, args) -> purifyAndCompileAssertion op args
+      VQuantifyRatTensor (Forall, _) -> throwError catchableUnsupportedAlternatingQuantifiersError
+      ---------------------
+      -- Recursive cases --
+      ---------------------
+      VNot arg -> compileBoolExpr =<< lowerNot arg
+      VBoolIf args -> compileBoolExpr =<< unfoldIf args
+      VAnd (TensorOp2Args _dims x y) -> andTrivial andPartitions <$> compileBoolExpr x <*> compileBoolExpr y
+      VOr (TensorOp2Args _dims x y) -> orTrivial orPartitions <$> compileBoolExpr x <*> compileBoolExpr y
+      VQuantifyRatTensor (Exists, args) -> eliminateExists args
+      VCompareNat {} -> unblockAndRec forcedValue
+      VCompareIndex {} -> unblockAndRec forcedValue
+      VReduceAndTensor {} -> unblockAndRec forcedValue
+      VReduceOrTensor {} -> unblockAndRec forcedValue
+      VBoolAt {} -> unblockAndRec forcedValue
   where
-    unblock = Unblocking.unblockBoolExpr unblockingActions
+    unblock forcedValue = Unblocking.unblockBoolExpr unblockingActions (Forced forcedValue)
     unblockAndRec e = compileBoolExpr =<< unblock e
 
 purifyAndCompileAssertion ::
@@ -145,7 +151,8 @@ compilePurifiedAssertion ::
   TensorOp2Args (Value Builtin) ->
   m (Either (Value Builtin) LinearAssertion)
 compilePurifiedAssertion op args@(TensorOp2Args dims xs ys) = do
-  let shape = case getDims dims of
+  maybeShape <- forceDims dims
+  let shape = case maybeShape of
         Nothing -> developerError $ "Non-concrete dimensions found" <+> prettyVerbose dims
         Just concreteShape -> concreteShape
 
@@ -158,7 +165,7 @@ compilePurifiedAssertion op args@(TensorOp2Args dims xs ys) = do
     Left (UnexpectedExpr e) ->
       developerError ("unexpected expression" <+> prettyVerbose e)
     Left (TrivialExpr b) ->
-      return $ Left $ IBoolLiteral b
+      return $ Left $ Forced $ IBoolLiteral b
     Left (UnreducedExpr e) -> do
       logDebugM MaxDetail $ do
         exprDoc <- prettyFriendlyInCtx e
@@ -181,7 +188,11 @@ type MonadQuantifierBody m =
   )
 
 unblockingActions :: (MonadQuantifierBody m) => UnblockingActions m
-unblockingActions = UnblockingActions unblockQuantifiedBoundVar unblockNetworkApplication
+unblockingActions =
+  UnblockingActions
+    { unblockRatTensorBoundVar = unblockQuantifiedBoundVar,
+      unblockNetworkApp = unblockNetworkApplication
+    }
 
 unblockQuantifiedBoundVar ::
   (MonadQuantifierBody m) =>
@@ -245,26 +256,30 @@ eliminateTensorAssertion ::
   ComparisonOp ->
   TensorOp2Args (Value Builtin) ->
   m (Value Builtin)
-eliminateTensorAssertion op (TensorOp2Args dims xs ys) =
-  case dims of
-    IDimNil -> do
-      -- For scalar comparisons, directly apply the comparison
-      evalCompareRatTensor op (TensorOp2Args IDimNil xs ys)
-    IDimCons d@(INatLiteral n) ds -> do
-      -- TODO switch to use `etaReduceTensor`?
-      nameCtx <- getNameContext
-      let tElem = fromTypeValue VRatType
-      let d0Arg = mkDims []
-      let mkAt vs i = evalAtTensor nameCtx evalApp eval (AtTensorArgs tElem d ds vs (IIndexLiteral i d))
-      let mkStackElement i = do
-            xsi <- mkAt xs i
-            ysi <- mkAt ys i
-            evalCompareRatTensor op (TensorOp2Args ds xsi ysi)
-      stackElements <- traverse mkStackElement [0 .. (n - 1)] :: m [Value Builtin]
-      let stackExpr = fromBoolTensorValue $ VBoolStackTensor (StackTensorArgs tElem d d0Arg stackElements)
-      result <- unoptimisedEvalReduceAndTensor (TensorReductionArgs (mkDims [n]) (IBoolLiteral True) stackExpr)
-      return result
+eliminateTensorAssertion op (TensorOp2Args dims xs ys) = do
+  maybeDimHead <- forceDimsHead dims
+  case maybeDimHead of
+    Just (d, ds) ->
+      return $
+        unforcedBuiltinApp (applyAccessor accessCompareRatTensorReducedBuiltin op) $
+          TensorReduceComparisonArgs
+            { tensorReduceOp2Dim = Forced $ INatLiteral d,
+              tensorReduceOp2Dims = ds,
+              tensorReduceOp2Arg1 = etaReduceAndStack d ds xs,
+              tensorReduceOp2Arg2 = etaReduceAndStack d ds ys
+            }
     _ -> compilerDeveloperError ("unexpected dimensions" <+> prettyVerbose dims)
+  where
+    etaReduceAndStack :: Int -> Value Builtin -> Value Builtin -> Value Builtin
+    etaReduceAndStack d ds vs =
+      fromRatTensorValue $
+        VRatStackTensor $
+          StackTensorArgs
+            { stackType = Forced IRatType,
+              stackFirstDim = Forced $ INatLiteral d,
+              stackRemainingDims = ds,
+              stackElements = etaReduceTensor (Forced IRatType) d ds vs
+            }
 
 networkEqualitiesToPartition ::
   (MonadQueryStructure m) =>

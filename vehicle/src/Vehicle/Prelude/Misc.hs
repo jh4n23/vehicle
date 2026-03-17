@@ -91,6 +91,11 @@ partitionMaybeM f (x : xs) = do
     Nothing -> (as, x : bs)
     Just y -> (y : as, bs)
 
+justEqual :: (Eq a) => Maybe a -> Maybe a -> Bool
+justEqual x y = case (x, y) of
+  (Just u, Just v) -> u == v
+  _ -> False
+
 unionMaybeWith :: (a -> a -> a) -> Maybe a -> Maybe a -> Maybe a
 unionMaybeWith _ Nothing mb = mb
 unionMaybeWith _ ma Nothing = ma

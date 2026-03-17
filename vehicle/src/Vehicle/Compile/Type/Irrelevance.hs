@@ -1,11 +1,9 @@
 module Vehicle.Compile.Type.Irrelevance
   ( RemoveIrrelevantCode,
     removeIrrelevantCodeFromProg,
-    removeIrrelevantCode,
   )
 where
 
-import Control.Monad.Identity
 import Data.List.NonEmpty qualified as NonEmpty (toList)
 import Vehicle.Compile.Error (MonadCompile)
 import Vehicle.Compile.Prelude
@@ -23,14 +21,12 @@ removeIrrelevantCodeFromProg x = do
     logDebug MaxDetail $ prettyExternal result
     return result
 
-removeIrrelevantCode :: (RemoveIrrelevantCode Identity a) => a -> a
-removeIrrelevantCode x = runIdentity $ remove x
-
 -------------------------------------------------------------------------------
 -- Remove polarity and linearity annotations
 
 type MonadRemove m =
-  (Monad m)
+  ( MonadLogger m
+  )
 
 class RemoveIrrelevantCode m a where
   remove :: (MonadRemove m) => a -> m a

@@ -7,11 +7,11 @@ import Data.Hashable (Hashable (..))
 import Data.List.NonEmpty (NonEmpty)
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
+import Vehicle.Compile.Normalise.Core
 import Vehicle.Data.Builtin.Interface
 import Vehicle.Data.Builtin.Interface.Normalise
 import Vehicle.Data.Builtin.Interface.Print
 import Vehicle.Data.Builtin.Standard.Core
-import Vehicle.Data.Code.Interface (HasBuiltinConstructor)
 import Vehicle.Data.DSL
 import Vehicle.Prelude
 
@@ -192,26 +192,23 @@ instance BuiltinHasIterate PolarityBuiltin where
 -----------------------------------------------------------------------------
 -- Printing
 
-instance ConvertableBuiltin PolarityBuiltin Builtin where
+instance PrintableBuiltin PolarityBuiltin where
   convertBuiltin p = \case
     PolarityConstructor c -> convertBuiltin p c
     PolarityFunction f -> convertBuiltin p f
     b -> cheatConvertBuiltin p $ pretty b
 
-instance PrintableBuiltin PolarityBuiltin where
-  coercionArgs _ = Nothing
-  isDerivedBuiltin = const Nothing
-
 -----------------------------------------------------------------------------
 -- Normalisation
 
-instance (HasBuiltinConstructor expr) => NormalisableBuiltin expr PolarityBuiltin where
-  evaluationScheme b spine = case b of
-    PolarityFunction Iterate -> NonSimple $ evalIterate spine
-    PolarityFunction _ -> Unevaluable
+instance NormalisableBuiltin PolarityBuiltin where
+  evaluationScheme b = case b of
+    PolarityFunction Iterate -> StandardEvaluation evalIterate
     _ -> Unevaluable
 
-  isCast _ _ = Nothing
+  isCast _ = False
+
+  isDerivedBuiltin = const Nothing
 
 -----------------------------------------------------------------------------
 -- DSL

@@ -15,9 +15,6 @@ import Vehicle.Prelude
 class IsArgs args where
   accessSpine :: Accessor [GenericArg expr] (args expr)
 
-class HasLambdaConstructor expr exprLamBody where
-  accessLamC :: Accessor (expr builtin) (GenericBinder (expr builtin), exprLamBody builtin)
-
 --------------------------------------------------------------------------------
 -- Op1Args
 
@@ -114,6 +111,9 @@ instance IsArgs TensorOp2Args where
         mkExpr = \(TensorOp2Args ds x y) -> [implicitIrrelevant ds, explicit x, explicit y]
       }
 
+mapTensorOp2Args :: (a -> a) -> TensorOp2Args a -> TensorOp2Args a
+mapTensorOp2Args f (TensorOp2Args ds xs ys) = TensorOp2Args ds (f xs) (f ys)
+
 traverseTensorOp2Args :: (Applicative f) => (t -> f t) -> TensorOp2Args t -> f (TensorOp2Args t)
 traverseTensorOp2Args f (TensorOp2Args ds xs ys) = TensorOp2Args ds <$> f xs <*> f ys
 
@@ -135,10 +135,6 @@ instance IsArgs TensorReductionArgs where
           _ -> Nothing,
         mkExpr = \(TensorReductionArgs ds e xs) -> [implicitIrrelevant ds, explicit e, explicit xs]
       }
-
-traverseReductionArgs :: (Applicative f) => (t -> f t) -> TensorReductionArgs t -> f (TensorReductionArgs t)
-traverseReductionArgs f (TensorReductionArgs ds e xs) =
-  TensorReductionArgs ds <$> f e <*> f xs
 
 --------------------------------------------------------------------------------
 -- IndexComparisonArgs
@@ -194,9 +190,6 @@ instance IsArgs IfArgs where
         mkExpr = \(IfArgs t c x y) -> [implicit t, explicit c, explicit x, explicit y]
       }
 
-traverseIfArgBranches :: (Applicative f) => (t -> f t) -> IfArgs t -> f (IfArgs t)
-traverseIfArgBranches f (IfArgs t c x y) = IfArgs t c <$> f x <*> f y
-
 data VecLitArgs expr = VecLitArgs
   { vecLitType :: expr,
     vecLitDim :: expr,
@@ -247,9 +240,6 @@ instance IsArgs AtTensorArgs where
         mkExpr = \(AtTensorArgs t d ds xs i) -> [implicit t, implicitIrrelevant d, implicitIrrelevant ds, explicit xs, explicit i]
       }
 
-traverseAtTensorArg :: (Applicative f) => (t -> f t) -> AtTensorArgs t -> f (AtTensorArgs t)
-traverseAtTensorArg f (AtTensorArgs t d ds tensor i) = AtTensorArgs t d ds <$> f tensor <*> pure i
-
 -- | Arguments for `ConstTensor`
 data ConstTensorArgs expr = ConstTensorArgs
   { constType :: expr,
@@ -268,11 +258,6 @@ instance IsArgs ConstTensorArgs where
 
 mapConstTensorValue :: (expr -> expr) -> ConstTensorArgs expr -> ConstTensorArgs expr
 mapConstTensorValue f ConstTensorArgs {..} = ConstTensorArgs {constValue = f constValue, ..}
-
-traverseConstTensorValue :: (Monad m) => (expr -> m expr) -> ConstTensorArgs expr -> m (ConstTensorArgs expr)
-traverseConstTensorValue f ConstTensorArgs {..} = do
-  constValue' <- f constValue
-  return $ ConstTensorArgs {constValue = constValue', ..}
 
 -- | Arguments for `StackTensor`
 data StackTensorArgs expr = StackTensorArgs
@@ -293,11 +278,6 @@ instance IsArgs StackTensorArgs where
 
 mapStackTensorElements :: (expr -> expr) -> StackTensorArgs expr -> StackTensorArgs expr
 mapStackTensorElements f StackTensorArgs {..} = StackTensorArgs {stackElements = fmap f stackElements, ..}
-
-traverseStackTensorElements :: (Monad m) => (expr -> m expr) -> StackTensorArgs expr -> m (StackTensorArgs expr)
-traverseStackTensorElements f StackTensorArgs {..} = do
-  stackElements' <- traverse f stackElements
-  return $ StackTensorArgs {stackElements = stackElements', ..}
 
 -- | Arguments for `ForeachTensor`
 data ForeachTensorArgs expr = ForeachTensorArgs
@@ -447,8 +427,8 @@ instance IsArgs FoldListArgs where
 
 -- | Arguments for `VectorToList`
 data VectorToListArgs expr = VectorToListArgs
-  { vectorToListElementType :: GenericArg expr,
-    vectorToListSize :: GenericArg expr,
+  { vectorToListElementType :: expr,
+    vectorToListSize :: expr,
     vectorToListArgs :: [expr]
   }
 
@@ -456,9 +436,9 @@ instance IsArgs VectorToListArgs where
   accessSpine =
     Access
       { getExpr = \case
-          t : n : xs -> Just $ VectorToListArgs t n (fmap argExpr xs)
+          t : n : xs -> Just $ VectorToListArgs (argExpr t) (argExpr n) (fmap argExpr xs)
           _ -> Nothing,
-        mkExpr = \(VectorToListArgs t n xs) -> t : n : fmap explicit xs
+        mkExpr = \(VectorToListArgs t n xs) -> implicit t : implicit n : fmap explicit xs
       }
 
 -- | Arguments for `Iterate`
@@ -496,27 +476,23 @@ instance IsArgs NetworkAppArgs where
       }
 
 -- | Arguments for `QuantifyRatTenosr`
-data QuantifyRatTensorArgs expr body = QuantifyRatTensorArgs
+data QuantifyRatTensorArgs expr = QuantifyRatTensorArgs
   { quantifyDimensions :: expr,
-    quantifyBinder :: GenericBinder expr,
-    quantifyBody :: body
+    quantifyFn :: expr
   }
 
-accessQuantifyRatTensorSpine ::
-  (HasLambdaConstructor expr body) =>
-  Accessor [GenericArg (expr builtin)] (QuantifyRatTensorArgs (expr builtin) (body builtin))
-accessQuantifyRatTensorSpine =
-  Access
-    { getExpr = \case
-        (fmap argExpr -> [dims, fn]) -> case getExpr accessLamC fn of
-          Just (binder, body) -> Just (QuantifyRatTensorArgs dims binder body)
-          _ -> Nothing
-        _ -> Nothing,
-      mkExpr = \(QuantifyRatTensorArgs dims binder body) ->
-        [ implicitIrrelevant dims,
-          explicit (mkExpr accessLamC (binder, body))
-        ]
-    }
+instance IsArgs QuantifyRatTensorArgs where
+  accessSpine =
+    Access
+      { getExpr = \case
+          [dims, fn] -> do
+            Just (QuantifyRatTensorArgs (argExpr dims) (argExpr fn))
+          _ -> Nothing,
+        mkExpr = \(QuantifyRatTensorArgs dims fn) ->
+          [ implicitIrrelevant dims,
+            explicit fn
+          ]
+      }
 
 --------------------------------------------------------------------------------
 -- IndexTypeArgs
@@ -555,7 +531,7 @@ instance IsArgs IndexLiteralArgs where
 --------------------------------------------------------------------------------
 -- VectorTypeArgs
 
--- | Arguments for the `Index` type
+-- | Arguments for the `Vector` type
 data VectorTypeArgs expr = VectorTypeArgs
   { vectorElemType :: expr,
     vectorDim :: expr
@@ -573,7 +549,7 @@ instance IsArgs VectorTypeArgs where
 --------------------------------------------------------------------------------
 -- TensorTypeArgs
 
--- | Arguments for the `Index` type
+-- | Arguments for the `Tensor` type
 data TensorTypeArgs expr = TensorTypeArgs
   { tensorElemType :: expr,
     tensorDims :: expr

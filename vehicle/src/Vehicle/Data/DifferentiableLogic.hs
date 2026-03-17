@@ -3,6 +3,7 @@ module Vehicle.Data.DifferentiableLogic where
 import Data.Map (Map)
 import GHC.Generics (Generic)
 import Prettyprinter
+import Vehicle.Compile.Prelude (Decl, Expr (..))
 import Vehicle.Data.Builtin.Loss
 import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Code.Value
@@ -93,7 +94,7 @@ elementLogicName = "DifferentiableElementLogic"
 tensorLogicName :: Name
 tensorLogicName = "DifferentiableTensorLogic"
 
-isLogicDecl :: VDecl Builtin -> Bool
+isLogicDecl :: Decl Builtin -> Bool
 isLogicDecl = \case
-  DefFunction _ _ _ (VFreeVar ident []) _ -> nameOf ident `elem` ([elementLogicName, tensorLogicName] :: [Name])
+  DefFunction _ _ _ (FreeVar _ ident) _ -> nameOf ident `elem` ([elementLogicName, tensorLogicName] :: [Name])
   _ -> False

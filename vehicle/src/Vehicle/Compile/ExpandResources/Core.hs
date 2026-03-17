@@ -9,6 +9,7 @@ import Vehicle.Compile.Prelude
 import Vehicle.Compile.Resource (NetworkName)
 import Vehicle.Data.Builtin.Standard (Builtin)
 import Vehicle.Data.Code.Value
+import Vehicle.Data.Variable.Bound.Context.Name (MonadNameContext, NameBoundContextT, runFreshNameBoundContextT)
 import Vehicle.Data.Variable.Free.Context (FreeContextT, MonadFreeContext, runFreshFreeContextT)
 import Vehicle.Verify.Core
 
@@ -28,7 +29,7 @@ lookupNetworkInfo name ctx = do
 
 type InferableParameterEntry = (DeclProvenance, ExternalResource, Int)
 
-type InferableParameterContext = Map Identifier (Provenance, GluedType Builtin, Maybe InferableParameterEntry)
+type InferableParameterContext = Map Identifier (Provenance, Type Builtin, Maybe InferableParameterEntry)
 
 type ExplicitParameterContext = Map Identifier (Value Builtin)
 
@@ -56,17 +57,20 @@ initialExpandResourcesState resources =
 type MonadExpandResources m =
   ( MonadCompile m,
     MonadState ExpandResourcesState m,
-    MonadFreeContext Builtin m
+    MonadFreeContext Builtin m,
+    MonadNameContext m,
+    MonadIO m
   )
 
 runExpandResourcesT ::
-  (Monad m) =>
+  (MonadIO m) =>
   Resources ->
-  StateT ExpandResourcesState (FreeContextT Builtin m) a ->
+  StateT ExpandResourcesState (NameBoundContextT (FreeContextT Builtin m)) a ->
   m (a, ExpandResourcesState)
 runExpandResourcesT resources action =
   runFreshFreeContextT (Proxy @Builtin) $
-    runStateT action (initialExpandResourcesState resources)
+    runFreshNameBoundContextT $
+      runStateT action (initialExpandResourcesState resources)
 
 getExplicitParameterContext ::
   (MonadExpandResources m) =>
@@ -89,7 +93,7 @@ noteInferableParameter ::
   (MonadExpandResources m) =>
   Provenance ->
   Identifier ->
-  GluedType Builtin ->
+  Type Builtin ->
   m ()
 noteInferableParameter p ident paramType =
   modify $ \ExpandResourcesState {..} ->
@@ -189,7 +193,7 @@ addPossibleInferableParameterSolution ::
   (MonadExpandResources m) =>
   Identifier ->
   Provenance ->
-  GluedType Builtin ->
+  Type Builtin ->
   InferableParameterEntry ->
   m ()
 addPossibleInferableParameterSolution ident p declType entry =

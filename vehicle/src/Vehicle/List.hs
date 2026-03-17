@@ -12,15 +12,16 @@ import Data.Text (Text, pack)
 import GHC.Generics
 import Vehicle.Compile.Error (CompileError (MultiPropertyTraveralError), MultiPropertyTraveralError (..))
 import Vehicle.Compile.ExpandResources (expandResources)
-import Vehicle.Compile.Normalise.NBE (evalDecl, normaliseClosure)
+import Vehicle.Compile.Normalise.NBE (forceValue)
 import Vehicle.Compile.Prelude hiding (Dataset, Network, Parameter, name)
 import Vehicle.Compile.Print
 import Vehicle.Compile.Print.Error (prettyCompileError)
 import Vehicle.Compile.Property (traverseMultiProperty)
+import Vehicle.Compile.TypedView
 import Vehicle.Data.Builtin.Interface (Accessor (..))
 import Vehicle.Data.Builtin.Standard (Builtin (..), Quantifier)
 import Vehicle.Data.Code.Interface (QuantifyRatTensorArgs (..), accessQuantifyRatTensor)
-import Vehicle.Data.Code.Value (Closure, Spine, VDecl, VType, Value (..))
+import Vehicle.Data.Code.Value (ForcedValue (..), Spine, VType, Value (..), emptyBoundEnv, thunkifyExpr)
 import Vehicle.Data.Variable.Bound.Context.Name
 import Vehicle.Data.Variable.Free.Context (MonadFreeContext, addDeclEntryToContext, runFreshFreeContextT)
 import Vehicle.Prelude.Logging.Instance
@@ -84,14 +85,13 @@ type MonadList m =
 searchDecls :: (MonadList m, MonadSupply PropertyID m) => [Decl Builtin] -> m ()
 searchDecls = \case
   [] -> return ()
-  d : ds -> do
-    normDecl <- evalDecl d
-    searchDecl normDecl
-    addDeclEntryToContext normDecl $ searchDecls ds
+  decl : decls -> do
+    searchDecl decl
+    addDeclEntryToContext decl $ searchDecls decls
 
-searchDecl :: (MonadList m, MonadSupply PropertyID m) => VDecl Builtin -> m ()
+searchDecl :: (MonadList m, MonadSupply PropertyID m) => Decl Builtin -> m ()
 searchDecl decl = do
-  let sharedData = mkSharedData (provenanceOf decl) (nameOf decl)
+  let sharedData t = mkSharedData (provenanceOf decl) (nameOf decl) (thunkifyExpr emptyBoundEnv t)
   case decl of
     DefAbstract _ _ sort t -> case sort of
       NetworkDef -> tell [Network $ NetworkSummary (sharedData t)]
@@ -101,7 +101,10 @@ searchDecl decl = do
     DefFunction _ _ sort typ body
       | not $ isAnnotatedAsProperty sort -> return ()
       | otherwise -> do
-          entity <- searchPropertyDecl (identifierOf decl, provenanceOf decl) (sharedData typ) typ body
+          let declProv = (identifierOf decl, provenanceOf decl)
+          let typValue = thunkifyExpr emptyBoundEnv typ
+          let exprValue = thunkifyExpr emptyBoundEnv body
+          entity <- searchPropertyDecl declProv (sharedData typ) typValue exprValue
           tell [entity]
     DefRecord {} -> return ()
 
@@ -134,21 +137,23 @@ type MonadListProperty m =
 
 -- | Traverse a value to find all quantified variables
 searchValue :: (MonadListProperty m) => Value Builtin -> m ()
-searchValue value = case value of
-  VBoundVar _ spine -> searchSpine spine
-  VFreeVar _ spine -> searchSpine spine
-  VBuiltin _ spine -> do
-    searchBuiltinForQuantifier value
-    searchSpine spine
-  VLam binder closure -> do
-    body <- normaliseClosure binder closure
-    searchValue body
-  VRecord _ fields -> traverse_ searchValue fields
-  VRecordAcc _ record _ spine -> do searchValue record; searchSpine spine
-  -- Never traverse into types so the following cases shouldn't happen!
-  VUniverse {} -> unexpectedExprError pass "VUniverse"
-  VPi {} -> unexpectedExprError pass "VUniverse"
-  VMeta {} -> unexpectedExprError pass "VMeta"
+searchValue value = do
+  forcedValue <- forceValue value
+  case forcedValue of
+    VBoundVar _ spine -> searchSpine spine
+    VFreeVar _ spine -> searchSpine spine
+    VBuiltin _ spine -> do
+      searchBuiltinForQuantifier value
+      searchSpine spine
+    VLam binder closure -> do
+      body <- extendClosureWithBound binder closure
+      searchValue body
+    VRecord _ fields -> traverse_ searchValue fields
+    VRecordAcc _ record _ spine -> do searchValue record; searchSpine spine
+    -- Never traverse into types so the following cases shouldn't happen!
+    VUniverse {} -> unexpectedExprError pass "VUniverse"
+    VPi {} -> unexpectedExprError pass "VUniverse"
+    VMeta {} -> unexpectedExprError pass "VMeta"
   where
     pass = "list"
 
@@ -156,12 +161,15 @@ searchSpine :: (MonadListProperty m) => Spine Builtin -> m ()
 searchSpine = traverse_ (traverse_ searchValue)
 
 searchBuiltinForQuantifier :: (MonadListProperty m) => Value Builtin -> m ()
-searchBuiltinForQuantifier value = case getExpr (accessQuantifyRatTensor @Value @Builtin @Closure) value of
-  Just (q, args) -> do
-    let (name, p) = getNamedBinderInfo (quantifyBinder args)
-    let sharedData = mkSharedData p name (typeOf $ quantifyBinder args)
-    tell [QuantifiedVariableSummary sharedData q]
-  _ -> return ()
+searchBuiltinForQuantifier value = do
+  forcedValue <- forceValue value
+  case getExpr accessQuantifyRatTensor forcedValue of
+    Just (q, args) -> do
+      let (binder, _) = accessQuantifierLambda (quantifyFn args)
+      let (name, p) = getNamedBinderInfo binder
+      let sharedData = mkSharedData p name (Unforced $ typeOf binder)
+      tell [QuantifiedVariableSummary sharedData q]
+    _ -> return ()
 
 --------------------------------------------------------------------------------
 -- JSON output format

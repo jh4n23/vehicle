@@ -21,16 +21,16 @@ import Vehicle.Compile.ExpandResources (expandResources)
 import Vehicle.Compile.ExpandResources.Core
 import Vehicle.Compile.LiftIf (unfoldIf)
 import Vehicle.Compile.LowerNot (lowerNot, negateQuantifierBody)
-import Vehicle.Compile.Normalise.NBE (evalDecl)
+import Vehicle.Compile.Normalise.NBE (forceValue)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyFriendly, prettyFriendlyEmptyCtx)
 import Vehicle.Compile.Print.Warning ()
 import Vehicle.Compile.Property (traverseMultiProperty)
-import Vehicle.Compile.Unblock (UnblockingActions (..), unblockBoolExpr)
+import Vehicle.Compile.TypedView
+import Vehicle.Compile.TypedView.Unblock (UnblockingActions (..), unblockBoolExpr)
 import Vehicle.Data.Builtin.Standard
 import Vehicle.Data.Code.BooleanExpr
 import Vehicle.Data.Code.Interface
-import Vehicle.Data.Code.TypedView
 import Vehicle.Data.Code.Value
 import Vehicle.Data.MaybeTrivial (MaybeTrivial (..), andTrivial, orTrivial)
 import Vehicle.Data.Variable.Bound.Context.Name
@@ -119,8 +119,7 @@ compileDecls ::
   m [(Name, MultiProperty PropertyAddress)]
 compileDecls settings = \case
   [] -> return []
-  (d : ds) -> do
-    decl <- evalDecl d
+  decl : ds -> do
     property <- case decl of
       DefFunction p ident anns typ body
         | isAnnotatedAsProperty anns ->
@@ -140,15 +139,17 @@ compilePropertyDecl ::
   (MonadStdIO m, MonadCompile m, MonadFreeContext Builtin m, MonadSupply PropertyID m) =>
   CompilationSettings ->
   DeclProvenance ->
-  VType Builtin ->
-  Value Builtin ->
+  Type Builtin ->
+  Expr Builtin ->
   m (MultiProperty PropertyAddress)
 compilePropertyDecl settings prov typ body = do
   propertyID <- demand
   let compilePropertyFn = compileSingleProperty settings prov
   logDebug MaxDetail $ prettyFriendlyEmptyCtx typ
   logDebug MaxDetail $ prettyFriendlyEmptyCtx body
-  errorOrResult <- traverseMultiProperty compilePropertyFn propertyID (nameOf prov) typ body
+  let vtype = thunkifyExpr emptyBoundEnv typ
+  let vbody = thunkifyExpr emptyBoundEnv body
+  errorOrResult <- traverseMultiProperty compilePropertyFn propertyID (nameOf prov) vtype vbody
   case errorOrResult of
     Left err -> throwError $ MultiPropertyTraveralError prov err
     Right result -> return result
@@ -194,51 +195,53 @@ compileQueries ::
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m) =>
   Value Builtin ->
   m (Property QueryMetaData)
-compileQueries expr = do
-  showTopLevelEntry expr
-  showTopLevelExit =<< case toBoolValue expr of
-    ----------------
-    -- Base cases --
-    ----------------
-    VBoolLiteral b -> return $ Trivial b
-    VQuantifyRatTensor (Exists, args) -> compileQuantifiedQuerySet False args
-    VQuantifyRatTensor (Forall, args) -> do
-      logDebug MaxDetail $ "negate" <+> pretty Forall
-      negatedArgs <- negateQuantifierBody args
-      compileQuantifiedQuerySet True negatedArgs
-    ---------------------
-    -- Recursive cases --
-    ---------------------
-    VAnd (TensorOp2Args _dims e1 e2) -> andTrivial andBoolExpr <$> compileQueries e1 <*> compileQueries e2
-    VOr (TensorOp2Args _dims e1 e2) -> orTrivial orBoolExpr <$> compileQueries e1 <*> compileQueries e2
-    VBoolIf args -> compileQueries =<< unfoldIf args
-    -------------------------
-    -- Blocked expressions --
-    -------------------------
-    VReduceAndTensor {} -> compileQueries =<< unblock expr
-    VReduceOrTensor {} -> compileQueries =<< unblock expr
-    VBoolAt {} -> compileQueries =<< unblock expr
-    VCompareIndex {} -> compileQueries =<< unblock expr
-    VCompareNat {} -> compileQueries =<< unblock expr
-    VNot args -> compileQueries =<< lowerNot args
-    -----------------
-    -- Mixed cases --
-    -----------------
-    -- We can only fail to unblock these cases because we can't evaluate networks
-    -- applied to constant arguments or because of if statements.
-    --
-    -- (if (forall x . f x > 0) then x else 0) > 0
-    --
-    -- When we have the ability to evaluate networks then this case can be turned to a
-    -- call to purify.
-    VCompareRatTensor {} -> compileUnquantifiedQuerySet expr
+compileQueries value = do
+  showTopLevelEntry value
+  showTopLevelExit =<< do
+    forcedValue <- forceValue value
+    case toBoolValue forcedValue of
+      ----------------
+      -- Base cases --
+      ----------------
+      VBoolLiteral b -> return $ Trivial b
+      VQuantifyRatTensor (Exists, args) -> compileQuantifiedQuerySet False args
+      VQuantifyRatTensor (Forall, args) -> do
+        logDebug MaxDetail $ "negate" <+> pretty Forall
+        negatedArgs <- negateQuantifierBody args
+        compileQuantifiedQuerySet True negatedArgs
+      ---------------------
+      -- Recursive cases --
+      ---------------------
+      VAnd (TensorOp2Args _dims e1 e2) -> andTrivial andBoolExpr <$> compileQueries e1 <*> compileQueries e2
+      VOr (TensorOp2Args _dims e1 e2) -> orTrivial orBoolExpr <$> compileQueries e1 <*> compileQueries e2
+      VBoolIf args -> compileQueries =<< unfoldIf args
+      -------------------------
+      -- Blocked expressions --
+      -------------------------
+      VReduceAndTensor {} -> compileQueries =<< unblock forcedValue
+      VReduceOrTensor {} -> compileQueries =<< unblock forcedValue
+      VBoolAt {} -> compileQueries =<< unblock forcedValue
+      VCompareIndex {} -> compileQueries =<< unblock forcedValue
+      VCompareNat {} -> compileQueries =<< unblock forcedValue
+      VNot args -> compileQueries =<< lowerNot args
+      -----------------
+      -- Mixed cases --
+      -----------------
+      -- We can only fail to unblock these cases because we can't evaluate networks
+      -- applied to constant arguments or because of if statements.
+      --
+      -- (if (forall x . f x > 0) then x else 0) > 0
+      --
+      -- When we have the ability to evaluate networks then this case can be turned to a
+      -- call to purify.
+      VCompareRatTensor {} -> compileUnquantifiedQuerySet value
   where
-    unblock = unblockBoolExpr topLevelUnblockingActions
+    unblock forcedValue = unblockBoolExpr topLevelUnblockingActions (Forced forcedValue)
 
 compileQuantifiedQuerySet ::
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m) =>
   Bool ->
-  QuantifyRatTensorArgs (Value Builtin) (Closure Builtin) ->
+  QuantifyRatTensorArgs (Value Builtin) ->
   m (Property QueryMetaData)
 compileQuantifiedQuerySet isPropertyNegated args =
   logCompilerSection2 MaxDetail "compilation of query set" $ do

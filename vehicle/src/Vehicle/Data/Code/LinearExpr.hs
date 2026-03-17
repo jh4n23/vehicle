@@ -9,7 +9,7 @@ import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import GHC.Generics (Generic)
-import Vehicle.Data.Tensor (HasShape (..), RatTensor, allTensor)
+import Vehicle.Data.Tensor (HasShape (..), RatTensor)
 import Vehicle.Data.Variable.Bound.Level
 import Vehicle.Prelude
 
@@ -29,11 +29,6 @@ class ConstantLike constant where
   unstackConstants :: constant -> [constant]
 
   toRatTensor :: constant -> Maybe RatTensor
-
--- The zero value must be an annihilator for scaling by a coefficient,
--- and the identity when added.
-isZero :: (ConstantLike constant) => constant -> Bool
-isZero constant = maybe False (allTensor (== 0)) (toRatTensor constant)
 
 -------------------------------------------------------------------------------
 -- Sparse representations of linear expressions

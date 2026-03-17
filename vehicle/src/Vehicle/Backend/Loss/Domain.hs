@@ -17,21 +17,24 @@ import Vehicle.Compile.Constants.Value
 import Vehicle.Compile.Error
 import Vehicle.Compile.LiftIf (unfoldIf)
 import Vehicle.Compile.LowerNot (lowerNot, negateQuantifierBody)
-import Vehicle.Compile.Normalise.NBE
+import Vehicle.Compile.Normalise.NBE (forceValue)
 import Vehicle.Compile.Normalise.Quote (Quote (..))
 import Vehicle.Compile.Prelude
-import Vehicle.Compile.Unblock (MonadPurify, UnblockingActions (..), maybeUnblockBoolExpr, tryPurifyAssertion)
+import Vehicle.Compile.TypedView
+import Vehicle.Compile.TypedView.Unblock (MonadPurify, UnblockingActions (..), tryPurifyAssertion, unblockBoolExpr)
 import Vehicle.Data.Assertion (NormalisedRelation (..), Relation (..), comparisonToAssertion)
 import Vehicle.Data.Bound
 import Vehicle.Data.Bound.FourierMotzkinElimination (fourierMotzkinTensorBoundsElimination)
-import Vehicle.Data.Builtin.Interface (Accessor (..))
-import Vehicle.Data.Builtin.Interface.Normalise (evalConstTensor, evalDivRatTensor, evalMulRatTensor)
+import Vehicle.Data.Builtin.Interface (Accessor (..), BuiltinHasRatLiterals (..), BuiltinHasTensors (accessConstTensorBuiltin))
+import Vehicle.Data.Builtin.Interface.Normalise
+  ( extractPartialShape,
+    unforcedBuiltinApp,
+  )
 import Vehicle.Data.Builtin.Loss
 import Vehicle.Data.Builtin.Standard
 import Vehicle.Data.Code.BooleanExpr (BooleanExpr (..), DisjunctAll (..), andBoolExpr, conjunctDisjunctsM, disjunctDisjuncts, disjunctsToList, eliminateTrivialDisjunctions, flattenBoolExpr)
 import Vehicle.Data.Code.Interface
 import Vehicle.Data.Code.LinearExpr
-import Vehicle.Data.Code.TypedView
 import Vehicle.Data.Code.Value
 import Vehicle.Data.DifferentiableLogic (TensorDifferentiableLogicField (..))
 import Vehicle.Data.MaybeTrivial
@@ -41,11 +44,12 @@ import Vehicle.Data.Variable.Bound.Context.Generic (BoundCtx)
 import Vehicle.Data.Variable.Bound.Context.Name
 import Vehicle.Data.Variable.Bound.Context.Tensor
 import Vehicle.Data.Variable.Bound.Level
+import Vehicle.Data.Variable.Free.Context (MonadFreeContext)
 import Vehicle.Prelude.Warning (CompileWarning (..))
 
 compileQuantifier ::
   (MonadLogic m) =>
-  (Quantifier, QuantifyRatTensorArgs (Value Builtin) (Closure Builtin)) ->
+  (Quantifier, QuantifyRatTensorArgs (Value Builtin)) ->
   m (Value LossBuiltin)
 compileQuantifier (q, args) = do
   maybePartitions <- compileQuantifierInternal (q, args)
@@ -71,7 +75,7 @@ checkFinalPartitionUnconstrained = \case
 
 compileQuantifierInternal ::
   (MonadLogic m) =>
-  (Quantifier, QuantifyRatTensorArgs (Value Builtin) (Closure Builtin)) ->
+  (Quantifier, QuantifyRatTensorArgs (Value Builtin)) ->
   m (MaybeTrivial Partitions)
 compileQuantifierInternal (q, args) = case q of
   Exists -> compileExists args
@@ -79,9 +83,9 @@ compileQuantifierInternal (q, args) = case q of
 
 compileForall ::
   (MonadLogic m) =>
-  QuantifyRatTensorArgs (Value Builtin) (Closure Builtin) ->
+  QuantifyRatTensorArgs (Value Builtin) ->
   m (MaybeTrivial Partitions)
-compileForall args@(QuantifyRatTensorArgs dims _ _) = do
+compileForall args@(QuantifyRatTensorArgs dims _) = do
   notArgs <- negateQuantifierBody args
   maybePartitions <- compileExists notArgs
   case maybePartitions of
@@ -90,16 +94,19 @@ compileForall args@(QuantifyRatTensorArgs dims _ _) = do
 
 compileExists ::
   (MonadLogic m) =>
-  QuantifyRatTensorArgs (Value Builtin) (Closure Builtin) ->
+  QuantifyRatTensorArgs (Value Builtin) ->
   m (MaybeTrivial Partitions)
-compileExists (QuantifyRatTensorArgs dims binder closure) =
+compileExists (QuantifyRatTensorArgs dims fn) =
   logCompilerSection2 MaxDetail "convert-exists" $ do
+    let (binder, closure) = accessQuantifierLambda fn
+
     -- Extract the domain for the search
     lv <- getBinderDepth
-    body <- normaliseClosure binder closure
+    body <- extendClosureWithBound binder closure
     finalCtx <- getShrunkenContext
 
-    result <- addTensorBinderToContext dims binder $ do
+    partialShape <- extractPartialShape dims
+    result <- addTensorBinderToContext partialShape binder $ do
       maybePartitions <- compileBool body
       case maybePartitions of
         Trivial b -> do
@@ -156,7 +163,7 @@ compileConstraints finalCtx dims binder var (maybeConstraints, maybeRemainder) =
     let remainder = Closure finalEnv lossBody
 
     -- Find the bounds on the quantified variable from the constraints
-    let partialShape = extractPartialShape dims
+    partialShape <- extractPartialShape dims
     disjunctedTensorBounds <- findTensorBounds var partialShape constraints
     logDebug MaxDetail $ "number-of-constraint-partitions:" <+> pretty (length disjunctedTensorBounds)
 
@@ -194,18 +201,17 @@ compileSearch ::
   m (Value LossBuiltin)
 compileSearch varName dims binder closure (Domain lowerBound upperBound) = do
   -- Convert the binder and the dimensions.
-  lossBinder <- traverse convertType binder
+  lossBinder <- traverse _ binder -- convertType
   lossDims <- convertDims dims
 
   -- Generate the operation for doing the reduction
-  nameCtx <- getNameContext
   genericReductionOp <- getLogicField ReduceDisjunction
   -- TODO This is a complete hack. We really need the notion of an unknown dimension inside Vehicle.
-  let reductionDims = IDimCons (INatLiteral (-1)) lossDims
-  reductionOp <- normaliseAppInEmptyFreeEnv nameCtx genericReductionOp [implicitIrrelevant reductionDims]
+  let reductionDims = Forced $ ICons (Forced INatType) (Forced $ INatLiteral (-1)) lossDims
+  let reductionOp = UnforcedApp genericReductionOp [implicitIrrelevant reductionDims]
 
   -- Reform the predicate as if we had no tensor variables at all
-  let lossPredicate = VLam lossBinder closure
+  let lossPredicate = Forced $ VLam lossBinder closure
 
   -- Create the final expression
   -- NOTE that this is unsound as we discard the strictness information.
@@ -219,7 +225,7 @@ compileSearch varName dims binder closure (Domain lowerBound upperBound) = do
               searchPredicate = lossPredicate
             }
   minimise <- getLogicDirection
-  return $ VBuiltin (LossBuiltinFunction $ SearchRatTensor varName minimise) spine
+  return $ Forced $ VBuiltin (LossBuiltinFunction $ SearchRatTensor varName minimise) spine
 
 findTensorBounds ::
   forall m.
@@ -283,10 +289,10 @@ type MonadDomain m =
   (MonadLogic m)
 
 orLossValue :: (MonadDomain m) => Value LossBuiltin -> Value LossBuiltin -> m (Value LossBuiltin)
-orLossValue e1 e2 = convertOr (TensorOp2Args IDimNil e1 e2)
+orLossValue e1 e2 = convertOr (TensorOp2Args (Forced $ INil (Forced INatType)) e1 e2)
 
 andLossValue :: (MonadDomain m) => Value LossBuiltin -> Value LossBuiltin -> m (Value LossBuiltin)
-andLossValue e1 e2 = convertAnd (TensorOp2Args IDimNil e1 e2)
+andLossValue e1 e2 = convertAnd (TensorOp2Args (Forced $ INil (Forced INatType)) e1 e2)
 
 notConstraint :: (MonadDomain m) => UserVariableConstraint -> m (BooleanExpr UserVariableConstraint)
 notConstraint (NormalisedRelation rel expr) = do
@@ -372,38 +378,40 @@ unblockingActions :: (MonadDomain m) => UnblockingActions m
 unblockingActions =
   UnblockingActions
     { unblockRatTensorBoundVar = purifyBoundVar,
-      unblockNetworkApp = \_unblockFn ident args -> return $ VFreeVar ident (mkExpr accessSpine args)
+      unblockNetworkApp = \ident args -> return $ Forced $ VFreeVar ident (mkExpr accessSpine args)
     }
 
 --------------------------------------------------------------------------------
 -- Search algorithm
 
 compileBool :: (MonadDomain m) => Value Builtin -> m (MaybeTrivial Partitions)
-compileBool value = logEntryAndExit value $ case toBoolValue value of
-  -----------------------
-  -- Useful base cases --
-  -----------------------
-  VCompareRatTensor args -> compileComparison args
-  --------------------------
-  -- Un-useful base cases --
-  --------------------------
-  VBoolLiteral b -> return $ Trivial b
-  VCompareNat {} -> unsupportedOperation "CompareNat"
-  VCompareIndex {} -> unsupportedOperation "CompareIndex"
-  ---------------------
-  -- Recursive cases --
-  ---------------------
-  VAnd args -> compileAnd args
-  VOr args -> compileOr args
-  VBoolIf args -> compileBool =<< unfoldIf args
-  VNot args -> compileBool =<< lowerNot args
-  VQuantifyRatTensor args -> compileQuantifierInternal args
-  -------------------
-  -- Blocked cases --
-  -------------------
-  VReduceAndTensor {} -> unblockBoolValue value
-  VReduceOrTensor {} -> unblockBoolValue value
-  VBoolAt {} -> unblockBoolValue value
+compileBool value = logEntryAndExit value $ do
+  forcedValue <- forceValue value
+  case toBoolValue forcedValue of
+    -----------------------
+    -- Useful base cases --
+    -----------------------
+    VCompareRatTensor args -> compileComparison args
+    --------------------------
+    -- Un-useful base cases --
+    --------------------------
+    VBoolLiteral b -> return $ Trivial b
+    VCompareNat {} -> unsupportedOperation "CompareNat"
+    VCompareIndex {} -> unsupportedOperation "CompareIndex"
+    ---------------------
+    -- Recursive cases --
+    ---------------------
+    VAnd args -> compileAnd args
+    VOr args -> compileOr args
+    VBoolIf args -> compileBool =<< unfoldIf args
+    VNot args -> compileBool =<< lowerNot args
+    VQuantifyRatTensor args -> compileQuantifierInternal args
+    -------------------
+    -- Blocked cases --
+    -------------------
+    VReduceAndTensor {} -> unblockBoolValue value
+    VReduceOrTensor {} -> unblockBoolValue value
+    VBoolAt {} -> unblockBoolValue value
 
 compileAnd ::
   (MonadDomain m) =>
@@ -559,7 +567,7 @@ purifyBoundVar :: (MonadLogger m, MonadReadableTensorBoundContext m) => Lv -> m 
 purifyBoundVar lv = do
   (_, maybeUserVars) <- lookupVariableInNestedCtx lv
   case maybeUserVars of
-    Nothing -> return $ VBoundVar lv []
+    Nothing -> return $ Forced $ VBoundVar lv []
     Just (_tensorVar, sliceVar) -> replaceTensorVariableWithStackedChildren sliceVar
 
 --------------------------------------------------------------------------------
@@ -567,75 +575,77 @@ purifyBoundVar lv = do
 
 compileLinearExpr ::
   forall m.
-  (MonadLogger m, MonadReadableTensorBoundContext m, MonadError (Value Builtin) m) =>
+  (MonadLogger m, MonadFreeContext Builtin m, MonadReadableTensorBoundContext m, MonadError (Value Builtin) m) =>
   VDims LossBuiltin ->
   Value Builtin ->
   m (LinearExpr SliceVariable TensorValue)
-compileLinearExpr dims expr = case toRatTensorValue expr of
-  ----------------
-  -- Base cases --
-  ----------------
-  VRatTensorLiteral t -> do
-    let lossExpr = mkExpr accessRatTensorLiteral t
-    return $ constantExpr $ TensorValue dims lossExpr
-  VRatTensorBoundVar var -> do
-    maybeExpr <- compileRatTensorVar dims var
-    maybe unlinearisable return maybeExpr
-  ---------------------
-  -- Inductive cases --
-  ---------------------
-  VNegRatTensor (TensorOp1Args _ e) -> do
-    e' <- compileLinearExpr dims e
-    return $ scaleExpr (-1) e'
-  VAddRatTensor (TensorOp2Args _ e1 e2) -> do
-    e1' <- compileLinearExpr dims e1
-    e2' <- compileLinearExpr dims e2
-    return $ addExprsUnsafe 1 1 e1' e2'
-  VSubRatTensor (TensorOp2Args _ e1 e2) -> do
-    e1' <- compileLinearExpr dims e1
-    e2' <- compileLinearExpr dims e2
-    return $ addExprsUnsafe 1 (-1) e1' e2'
-  ---------------------
-  -- Unreduced cases --
-  ---------------------
-  -- The expression is being blocked
-  VRatConstTensor {} -> unlinearisable
-  VRatStackTensor {} -> unlinearisable
-  VRatAt {} -> unlinearisable
-  VRatTensorFreeVar ident [] ->
-    return $ constantExpr $ TensorValue dims (VFreeVar ident [])
-  VRatTensorFreeVar {} -> unlinearisable
-  VRatForeach {} -> unlinearisable
-  VIfRatTensor {} -> unlinearisable
-  -----------------------
-  -- Unsupported cases --
-  -----------------------
-  -- Min/max could be handled by splitting into two constraints?
-  VMinRatTensor {} -> unlinearisable
-  VMaxRatTensor {} -> unlinearisable
-  VReduceAddRatTensor {} -> unlinearisable
-  VReduceMulRatTensor {} -> unlinearisable
-  VReduceMinRatTensor {} -> unlinearisable
-  VReduceMaxRatTensor {} -> unlinearisable
-  VMulRatTensor (TensorOp2Args _ e1 e2) -> do
-    e1' <- compileLinearExpr dims e1
-    e2' <- compileLinearExpr dims e2
-    case (isConstant e1', isConstant e2') of
-      (Just (TensorValue _ v1), Just (TensorValue _ v2)) -> do
-        result <- evalMulRatTensor (TensorOp2Args dims v1 v2)
-        return $ constantExpr $ TensorValue dims result
-      _ -> unlinearisable
-  VDivRatTensor (TensorOp2Args _ e1 e2) -> do
-    e1' <- compileLinearExpr dims e1
-    e2' <- compileLinearExpr dims e2
-    case (isConstant e1', isConstant e2') of
-      (Just (TensorValue _ v1), Just (TensorValue _ v2)) -> do
-        result <- evalDivRatTensor (TensorOp2Args dims v1 v2)
-        return $ constantExpr $ TensorValue dims result
-      _ -> unlinearisable
+compileLinearExpr dims value = do
+  forcedValue <- forceValue value
+  case toRatTensorValue forcedValue of
+    ----------------
+    -- Base cases --
+    ----------------
+    VRatTensorLiteral t -> do
+      let lossExpr = Forced $ mkExpr accessRatTensorLiteral t
+      return $ constantExpr $ TensorValue dims lossExpr
+    VRatTensorBoundVar var -> do
+      maybeExpr <- compileRatTensorVar dims var
+      maybe unlinearisable return maybeExpr
+    ---------------------
+    -- Inductive cases --
+    ---------------------
+    VNegRatTensor (TensorOp1Args _ e) -> do
+      e' <- compileLinearExpr dims e
+      return $ scaleExpr (-1) e'
+    VAddRatTensor (TensorOp2Args _ e1 e2) -> do
+      e1' <- compileLinearExpr dims e1
+      e2' <- compileLinearExpr dims e2
+      return $ addExprsUnsafe 1 1 e1' e2'
+    VSubRatTensor (TensorOp2Args _ e1 e2) -> do
+      e1' <- compileLinearExpr dims e1
+      e2' <- compileLinearExpr dims e2
+      return $ addExprsUnsafe 1 (-1) e1' e2'
+    ---------------------
+    -- Unreduced cases --
+    ---------------------
+    -- The expression is being blocked
+    VRatConstTensor {} -> unlinearisable
+    VRatStackTensor {} -> unlinearisable
+    VRatAt {} -> unlinearisable
+    VRatTensorFreeVar ident [] ->
+      return $ constantExpr $ TensorValue dims (Forced $ VFreeVar ident [])
+    VRatTensorFreeVar {} -> unlinearisable
+    VRatForeach {} -> unlinearisable
+    VIfRatTensor {} -> unlinearisable
+    -----------------------
+    -- Unsupported cases --
+    -----------------------
+    -- Min/max could be handled by splitting into two constraints?
+    VMinRatTensor {} -> unlinearisable
+    VMaxRatTensor {} -> unlinearisable
+    VReduceAddRatTensor {} -> unlinearisable
+    VReduceMulRatTensor {} -> unlinearisable
+    VReduceMinRatTensor {} -> unlinearisable
+    VReduceMaxRatTensor {} -> unlinearisable
+    VMulRatTensor (TensorOp2Args _ e1 e2) -> do
+      e1' <- compileLinearExpr dims e1
+      e2' <- compileLinearExpr dims e2
+      case (isConstant e1', isConstant e2') of
+        (Just (TensorValue _ v1), Just (TensorValue _ v2)) -> do
+          let result = unforcedBuiltinApp accessMulRatTensorBuiltin (TensorOp2Args dims v1 v2)
+          return $ constantExpr $ TensorValue dims result
+        _ -> unlinearisable
+    VDivRatTensor (TensorOp2Args _ e1 e2) -> do
+      e1' <- compileLinearExpr dims e1
+      e2' <- compileLinearExpr dims e2
+      case (isConstant e1', isConstant e2') of
+        (Just (TensorValue _ v1), Just (TensorValue _ v2)) -> do
+          let result = unforcedBuiltinApp accessDivRatTensorBuiltin (TensorOp2Args dims v1 v2)
+          return $ constantExpr $ TensorValue dims result
+        _ -> unlinearisable
   where
     unlinearisable :: m (LinearExpr SliceVariable TensorValue)
-    unlinearisable = throwError expr
+    unlinearisable = throwError value
 
 compileRatTensorVar ::
   (MonadLogger m, MonadReadableTensorBoundContext m) =>
@@ -645,7 +655,13 @@ compileRatTensorVar ::
 compileRatTensorVar dims lv = do
   (_, maybeSliceVar) <- lookupVariableInNestedCtx lv
   forM maybeSliceVar $ \(_tensorVar, sliceVar) -> do
-    zeroTensor <- evalConstTensor $ ConstTensorArgs IRatType (IRatLiteral 0) dims
+    let zeroTensor =
+          unforcedBuiltinApp accessConstTensorBuiltin $
+            ConstTensorArgs
+              { constType = Forced IRatType,
+                constValue = Forced $ IRatLiteral 0,
+                constDims = dims
+              }
     return $ singletonVarExpr (TensorValue dims zeroTensor) sliceVar
 
 --------------------------------------------------------------------------------

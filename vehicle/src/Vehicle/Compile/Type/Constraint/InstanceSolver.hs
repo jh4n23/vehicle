@@ -4,7 +4,6 @@ module Vehicle.Compile.Type.Constraint.InstanceSolver
   )
 where
 
-import Control.Monad (zipWithM)
 import Control.Monad.Except (MonadError (..))
 import Data.Either (partitionEithers)
 import Data.Proxy (Proxy (..))
@@ -15,12 +14,11 @@ import Vehicle.Compile.Print.Error (formatCompileError)
 import Vehicle.Compile.Type.Constraint.Core
 import Vehicle.Compile.Type.Constraint.UnificationSolver (runUnificationSolver)
 import Vehicle.Compile.Type.Core
-import Vehicle.Compile.Type.Force (ForcedExpr (..), forceHead)
 import Vehicle.Compile.Type.Monad
 import Vehicle.Compile.Type.Monad.Class
 import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin)
+import Vehicle.Data.Code.Value
 import Vehicle.Data.Variable.Bound.Context.Generic
-import Vehicle.Data.Variable.Bound.Context.Name.Core (NamedBoundCtx)
 import Vehicle.Data.Variable.Bound.Level (dbLevelToIndex)
 import Vehicle.Data.Variable.Free.Context (MonadFreeContext (..))
 
@@ -29,7 +27,7 @@ import Vehicle.Data.Variable.Free.Context (MonadFreeContext (..))
 
 -- | Attempts to solve as many instance constraints as possible.
 runInstanceSolver ::
-  (MonadInstance builtin m, TypableBuiltin builtin) =>
+  (MonadTypeChecker builtin m, TypableBuiltin builtin) =>
   Proxy builtin ->
   InstanceSearchDepth ->
   m ()
@@ -55,17 +53,14 @@ type MonadInstance builtin m =
 
 solveInstanceConstraint ::
   forall builtin m.
-  (MonadInstance builtin m) =>
+  (MonadTypeChecker builtin m, TypableBuiltin builtin) =>
   InstanceSearchDepth ->
   WithContext (InstanceConstraint builtin) ->
   m ()
 solveInstanceConstraint depth constraint = do
-  normConstraint <- substMetaVariables constraint
-  logDebug MaxDetail $ "Forced:" <+> prettyExternal normConstraint
-
-  let goal = instanceGoal $ objectIn normConstraint
-  candidateState <- getCurrentCandidateState normConstraint
-  solveInstanceGoal normConstraint candidateState depth goal
+  let goal = instanceGoal $ objectIn constraint
+  candidateState <- getCurrentCandidateState constraint
+  solveInstanceGoal constraint candidateState depth goal
 
 solveInstanceGoal ::
   forall builtin m.
@@ -96,14 +91,15 @@ solveInstanceGoal constraint (candidates, failedCandidates) depth goal = do
     -- If there are no valid candidates then we fail.
     [] -> do
       freeCtx <- getFreeCtx (Proxy @builtin)
-      finalConstraint <- substMetaVariables constraint
+      metaCtx <- getsTypeCheckerDeclState metaVariableCtx
       throwError $
         TypingError $
           FailedInstanceConstraint $
             FailedInstanceConstraintError
-              { _freeCtx = freeCtx,
-                failedConstraint = finalConstraint,
-                exploredCandidates = failedCandidates <> unsuccessfulCandidates
+              { failedInstanceFreeCtx = freeCtx,
+                failedInstanceMetaCtx = metaCtx,
+                failedInstanceConstraint = constraint,
+                failedInstanceExploredCandidates = failedCandidates <> unsuccessfulCandidates
               }
 
     -- Otherwise there are still multiple valid candidates so we're forced to block.
@@ -112,25 +108,18 @@ solveInstanceGoal constraint (candidates, failedCandidates) depth goal = do
         "Multiple possible candidates:"
           <> lineIndent (vsep $ fmap (prettyExternal . successfulCandidate) successfulCandidates)
 
-      -- Find most general candiate
-      maybeLeastGeneralCanddiate <- findLeastGeneralCandidate (namedBoundCtxOf $ contextOf constraint) successfulCandidates
-      case maybeLeastGeneralCanddiate of
-        Just SuccessfulInstanceCandidate {..} -> do
-          logDebug MaxDetail $ "Accepting least general candidate:" <+> squotes (prettyExternal successfulCandidate)
-          adoptHypotheticalState successfulState
-        Nothing -> do
-          -- Create the updated constraint
-          let newPossibleCandidates = fmap successfulCandidate successfulCandidates
-          let newFailedCandidates = failedCandidates <> unsuccessfulCandidates
-          let newConstraint = flip mapObject constraint $ \c ->
-                c
-                  { instanceCandidateState = Just (newPossibleCandidates, newFailedCandidates)
-                  }
-          -- TODO can we be more precise with the set of blocking metas?
-          -- Probably not as the set of blocking metas will depend on the depth at which we're searching
-          blockedConstraint <- blockConstraintOn newConstraint <$> getUnsolvedMetas (Proxy @builtin)
+      -- Create the updated constraint
+      let newPossibleCandidates = fmap successfulCandidate successfulCandidates
+      let newFailedCandidates = failedCandidates <> unsuccessfulCandidates
+      let newConstraint = flip mapObject constraint $ \c ->
+            c
+              { instanceCandidateState = Just (newPossibleCandidates, newFailedCandidates)
+              }
+      -- TODO can we be more precise with the set of blocking metas?
+      -- Probably not as the set of blocking metas will depend on the depth at which we're searching
+      blockedConstraint <- blockConstraintOn newConstraint <$> getUnsolvedMetas (Proxy @builtin)
 
-          addInstanceConstraints [blockedConstraint]
+      addInstanceConstraints [blockedConstraint]
 
 getCurrentCandidateState ::
   forall builtin m.
@@ -202,7 +191,7 @@ getCandidatesInBoundCtx goal ctx = go ctx
 data SuccessfulInstanceCandidate builtin = SuccessfulInstanceCandidate
   { successfulCandidate :: WithContext (InstanceCandidate builtin),
     successfulState :: TypeCheckerState builtin,
-    successfulSolution :: Expr builtin
+    successfulSolution :: Value builtin
   }
 
 -- | Checks whether a candidate is a possibility for the instance goal.
@@ -247,7 +236,7 @@ acceptCandidate ::
   WithContext (InstanceConstraint builtin) ->
   InstanceGoal builtin ->
   WithContext (InstanceCandidate builtin) ->
-  m (Expr builtin)
+  m (Value builtin)
 acceptCandidate (WithContext Resolve {..} constraintCtx) goal candidate = do
   -- Allow the candidate to access all the arguments in the goal telescope.
   let goalCtxExtension = goalTelescope goal
@@ -256,18 +245,18 @@ acceptCandidate (WithContext Resolve {..} constraintCtx) goal candidate = do
   let extendedGoalInfo = (newConstraintCtx, instanceOrigin)
 
   -- Instantiate the candidate telescope with metas and subst into body.
-  (substCandidateExpr, substCandidateSolution) <-
+  (substCandidateType, substCandidateSolution) <-
     instantiateCandidateTelescope goalCtxExtension (constraintCtx, instanceOrigin) candidate
 
   -- Unify the goal and candidate bodies
-  goalConstraint <- createInstanceUnification extendedGoalInfo (goalExpr goal) substCandidateExpr
+  goalConstraint <- createInstanceUnification extendedGoalInfo (Forced $ forcedGoalValue goal) substCandidateType
 
   instantiateInstanceConstraintSolution (WithContext Resolve {..} newConstraintCtx) substCandidateSolution
 
   -- Add the constriants
   addUnificationConstraints [goalConstraint]
 
-  return substCandidateExpr
+  return substCandidateType
 
 -- | Generate meta variables for each binder in the telescope of the candidate
 -- and then substitute them into the candidate expression.
@@ -277,105 +266,17 @@ instantiateCandidateTelescope ::
   BoundCtx (Type builtin) ->
   InstanceConstraintInfo builtin ->
   WithContext (InstanceCandidate builtin) ->
-  m (Expr builtin, Expr builtin)
+  m (VType builtin, Expr builtin)
 instantiateCandidateTelescope goalCtxExtension (constraintCtx, constraintOrigin) candidate = do
   let WithContext InstanceCandidate {..} candidateCtx = candidate
   logCompilerSection MaxDetail "instantiating candidate telescope" $ do
     let initialCtx = goalCtxExtension ++ candidateCtx
     let createInstance relevance typ = do
           let newInfo = (setConstraintBoundCtx constraintCtx initialCtx, constraintOrigin)
-          (expr, constraint) <- createDerivedInstanceConstraint newInfo relevance typ
+          let normType = thunkifyExpr (boundContextToEnv initialCtx) typ
+          (expr, constraint) <- createDerivedInstanceConstraint newInfo relevance normType
           addInstanceConstraints [constraint]
           return expr
 
-    (candidateBody, candidateSol, _args) <- instantiateTelescope InstanceTelescope createInstance initialCtx (candidateExpr, candidateSolution)
+    (candidateBody, candidateSol, _args) <- instantiateTelescope createInstance initialCtx (candidateExpr, candidateSolution)
     return (candidateBody, candidateSol)
-
--- | Sees if one of the candidates is provably less general than all the
--- others, e.g.
---
---   HasAdd (Tensor Rat t)
---
--- is less than general than
---
---   {{TensorLike r}} -> HasAdd r
-findLeastGeneralCandidate ::
-  (MonadInstance builtin m, Eq builtin) =>
-  NamedBoundCtx ->
-  [SuccessfulInstanceCandidate builtin] ->
-  m (Maybe (SuccessfulInstanceCandidate builtin))
-findLeastGeneralCandidate ctx = \case
-  -- TODO this could be generalised to find a minimum in the whole graph
-  -- but this is sufficient now.
-  [c1, c2] -> do
-    isLessGeneral <- lessGeneralThan ctx c1 c2
-    return $ case isLessGeneral of
-      Nothing -> Nothing
-      -- This is a hack to stop type-classes with zero arguments
-      -- from being declared equal (e.g. `IsTensorType` in decidability types)...
-      Just EQ -> Nothing
-      Just LT -> Just c1
-      Just GT -> Just c2
-  _ -> return Nothing
-
-lessGeneralThan ::
-  forall builtin m.
-  (MonadInstance builtin m, Eq builtin) =>
-  NamedBoundCtx ->
-  SuccessfulInstanceCandidate builtin ->
-  SuccessfulInstanceCandidate builtin ->
-  m (Maybe Ordering)
-lessGeneralThan ctx candidate1 candidate2 =
-  go (successfulSolution candidate1) (successfulSolution candidate2)
-  where
-    go :: Expr builtin -> Expr builtin -> m (Maybe Ordering)
-    go v1 v2 = do
-      (f1, _) <- forceHead ctx v1
-      (f2, _) <- forceHead ctx v2
-      case (f1, f2) of
-        (FMeta {}, FMeta {}) -> return $ Just EQ
-        (FMeta {}, _) -> return $ Just GT
-        (_, FMeta {}) -> return $ Just LT
-        (FBuiltin _ b1 args1, FBuiltin _ b2 args2)
-          | b1 /= b2 -> return Nothing
-          | otherwise -> goArgs args1 args2
-        (FFreeVar _ i1 args1, FFreeVar _ i2 args2)
-          | i1 /= i2 -> return Nothing
-          | otherwise -> goArgs args1 args2
-        -- TODO extend with remaining cases?
-        _ -> return Nothing
-
-    goArgs :: Args builtin -> Args builtin -> m (Maybe Ordering)
-    goArgs args1 args2
-      | length args1 /= length args2 = return Nothing
-      | otherwise = do
-          maybeResults <- zipWithM (\x y -> go (argExpr x) (argExpr y)) args1 args2
-          let OrderingCounts {..} = countOrderings maybeResults
-          return $
-            if numberOfNothings > 0 || (numberOfLTs > 0 && numberOfGTs > 0)
-              then Nothing
-              else
-                if numberOfEQs == length maybeResults
-                  then Just EQ
-                  else
-                    if numberOfLTs > 0
-                      then Just LT
-                      else Just GT
-
-data OrderingCounts = OrderingCounts
-  { numberOfNothings :: Int,
-    numberOfEQs :: Int,
-    numberOfLTs :: Int,
-    numberOfGTs :: Int
-  }
-
-countOrderings :: [Maybe Ordering] -> OrderingCounts
-countOrderings = \case
-  [] -> OrderingCounts 0 0 0 0
-  o : os -> do
-    let counts = countOrderings os
-    case o of
-      Nothing -> counts {numberOfNothings = numberOfNothings counts + 1}
-      Just EQ -> counts {numberOfEQs = numberOfEQs counts + 1}
-      Just LT -> counts {numberOfLTs = numberOfLTs counts + 1}
-      Just GT -> counts {numberOfGTs = numberOfGTs counts + 1}

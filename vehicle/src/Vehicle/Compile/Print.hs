@@ -28,7 +28,6 @@ import Data.Map qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Tuple (swap)
-import GHC.Exts qualified as GHC (Constraint)
 import GHC.TypeLits
 import Prettyprinter (fill)
 import Vehicle.Compile.Constants.Rational
@@ -102,14 +101,16 @@ type NoCtx = ()
 data Tags
   = -- | The final tag denotes which output grammar should be used
     As VehicleLang
-  | -- | The `Named` tag ensures that the term is converted back to using named binders
+  | -- | This tag ensures that the term is converted back to using named binders
     Named Tags
-  | -- | The `Unnamed` tag denotes that the term should not be converted back to using named binders
+  | -- | This tag ensures that the term should not be converted back to using named binders
     Unnamed Tags
-  | -- | The `Cleaned` tag ensures that automatically inserted annotations, binders and modalities are removed.
+  | -- | This tag ensures that automatically inserted annotations, binders and modalities are removed.
     Cleaned Tags
-  | -- | The `ShortVectors` tag ensures that long vectors are printed out concisely.
+  | -- | This tag ensures that long vectors are printed out concisely.
     ShortVectors Tags
+  | -- | This tag ensures that generic builtins are converted back to the standard Builtin type.
+    StandardBuiltins Tags
 
 --------------------------------------------------------------------------------
 -- Strategies
@@ -122,6 +123,7 @@ data Strategy
   | AlterContext Strategy
   | DescopeNaively Strategy
   | DescopeWithNames Strategy
+  | ConvertBuiltins Strategy
   | Functor Strategy
   | PrintAs VehicleLang
   | QuoteValue Strategy
@@ -142,6 +144,13 @@ data MyProxy (a :: Strategy) = MyProxy
 
 test :: MyProxy (StrategyFor FriendlyTags TestType)
 test = _
+
+import GHC.Exts qualified as GHC (Constraint)
+
+-- | A type family you can attach to the instances below to get
+-- a trace of instance resolution printed out.
+type family Debug (strat :: Strategy) (msg :: Symbol) :: GHC.Constraint where
+  Debug strat msg = TypeError ('Text "Debug: " ':<>: 'Text (ShowStrategy strat) ':<>: 'Text msg)
 -}
 
 -- A type-class for printing out strategies to type-level strings
@@ -163,11 +172,6 @@ type family ShowStrategy (s :: Strategy) :: Symbol where
           (AppendSymbol ") (" (AppendSymbol (ShowStrategy s2) ")"))
       )
   ShowStrategy 'Pretty = "Pretty"
-
--- | A type family you can attach to the instances below to get
--- a trace of instance resolution printed out.
-type family Debug (strat :: Strategy) (msg :: Symbol) :: GHC.Constraint where
-  Debug strat msg = TypeError ('Text "Debug: " ':<>: 'Text (ShowStrategy strat) ':<>: 'Text msg)
 
 -- | This type family computes the correct printing strategy given the tags
 -- and the type of the expression.
@@ -193,35 +197,41 @@ type family StrategyFor (tags :: Tags) a :: Strategy where
   StrategyFor ('As lang) (D.Decl Builtin) = 'PrintAs lang
   StrategyFor ('Named tags) (D.Expr Builtin) = StrategyFor tags (D.Expr Builtin)
   StrategyFor ('Unnamed tags) (D.Expr Builtin) = StrategyFor tags (D.Expr Builtin)
+  StrategyFor ('StandardBuiltins tags) (D.Expr builtin) = 'ConvertBuiltins (StrategyFor tags (D.Expr Builtin))
+  StrategyFor ('StandardBuiltins tags) (D.Decl builtin) = 'ConvertBuiltins (StrategyFor tags (D.Decl Builtin))
   -----------------
   -- Scoped expr --
   -----------------
   -- Converting an `Expr` with DeBruijn indices to a named representation requires a named bound context to descope.
   -- Otherwise converting it to an unnamed representation we descope naively by just converting the variables directly
-  StrategyFor ('Named tags) (Expr builtin `In` NamedBoundCtx) = 'DescopeWithNames (StrategyFor tags (D.Expr Builtin))
-  StrategyFor ('Unnamed tags) (Expr builtin `In` ctx) = 'DescopeNaively (StrategyFor tags (D.Expr Builtin))
-  StrategyFor ('Named tags) (Decl builtin `In` NoCtx) = 'DescopeWithNames (StrategyFor tags (D.Decl Builtin))
-  StrategyFor ('Unnamed tags) (Decl builtin `In` ctx) = 'DescopeNaively (StrategyFor tags (D.Decl Builtin))
+  StrategyFor ('Named tags) (Expr builtin `In` NamedBoundCtx) = 'DescopeWithNames (StrategyFor tags (D.Expr builtin))
+  StrategyFor ('Unnamed tags) (Expr builtin `In` ctx) = 'DescopeNaively (StrategyFor tags (D.Expr builtin))
+  StrategyFor ('Named tags) (Decl builtin) = 'DescopeWithNames (StrategyFor tags (D.Decl builtin))
+  StrategyFor ('Unnamed tags) (Decl builtin) = 'DescopeNaively (StrategyFor tags (D.Decl builtin))
   ------------
   -- Values --
   ------------
-  -- To print a `Value` we need to quote it first. Note that we convert it to a `Builtin` representation immediately
-  StrategyFor ('Named tags) (Value builtin `In` NamedBoundCtx) = 'QuoteValue (StrategyFor ('Named tags) (Expr Builtin `In` NamedBoundCtx))
-  StrategyFor ('Unnamed tags) (Value builtin `In` ctx) = 'DescopeNaively (StrategyFor tags (D.Expr Builtin))
+  -- To print a `Value` we need to quote it first.
+  StrategyFor ('Named tags) (Value builtin `In` NamedBoundCtx) = 'QuoteValue (StrategyFor ('Named tags) (Expr builtin `In` NamedBoundCtx))
+  StrategyFor ('Named tags) (ForcedValue builtin `In` NamedBoundCtx) = 'QuoteValue (StrategyFor ('Named tags) (Expr builtin `In` NamedBoundCtx))
+  StrategyFor ('Unnamed tags) (Value builtin `In` ctx) = 'DescopeNaively (StrategyFor tags (D.Expr builtin))
+  StrategyFor ('Unnamed tags) (ForcedValue builtin `In` ctx) = 'DescopeNaively (StrategyFor tags (D.Expr builtin))
   StrategyFor tags (BoundEnv builtin `In` ctx) = StrategyFor tags (Value builtin `In` ctx)
   StrategyFor tags (DimensionedTensorValue builtin `In` ctx) = StrategyFor tags (Value builtin `In` ctx)
   -------------------
+  -- Alter context --
+  -------------------
+  StrategyFor tags (Contextualised object CompleteNamedBoundCtx) = 'AlterContext (StrategyFor tags (Contextualised object NamedBoundCtx))
+  StrategyFor tags (D.Expr Builtin `In` NoCtx) = 'AlterContext (StrategyFor tags (D.Expr Builtin))
+  StrategyFor tags (D.Arg Builtin `In` NoCtx) = 'AlterContext (StrategyFor tags (D.Arg Builtin))
+  StrategyFor tags (D.Binder Builtin `In` NoCtx) = 'AlterContext (StrategyFor tags (D.Binder Builtin))
+  -------------------
   -- Context setup --
   -------------------
-  StrategyFor tags (GenericProg expr) = 'SetupContext (StrategyFor tags (GenericModule expr))
-  StrategyFor tags (Module builtin) = StrategyFor tags (Decl builtin)
-  StrategyFor tags (Decl builtin) = 'SetupContext (StrategyFor tags (Decl builtin `In` NoCtx))
-  StrategyFor tags (Contextualised object CompleteNamedBoundCtx) = 'AlterContext (StrategyFor tags (Contextualised object NamedBoundCtx))
+  StrategyFor tags (GenericProg expr) = StrategyFor tags (GenericModule expr)
+  StrategyFor tags (GenericModule expr) = StrategyFor tags (GenericDecl expr)
   StrategyFor tags (Contextualised object ctx) = 'SetupContext (StrategyFor tags (object `In` ctx))
   StrategyFor tags (Contextualised object ctx `In` NoCtx) = 'SetupContext (StrategyFor tags (object `In` ctx))
-  StrategyFor tags (D.Expr Builtin `In` NoCtx) = 'SetupContext (StrategyFor tags (D.Expr Builtin))
-  StrategyFor tags (D.Arg Builtin `In` NoCtx) = 'SetupContext (StrategyFor tags (D.Expr Builtin))
-  StrategyFor tags (D.Binder Builtin `In` NoCtx) = 'SetupContext (StrategyFor tags (D.Expr Builtin))
   --------------------------------
   -- Distributing over functors --
   --------------------------------
@@ -351,11 +361,11 @@ type family BoundsErrorFunction tags (a :: k) :: ErrorMessage where
 -- for the combination to guide type-class resolution.
 type PrettyWith tags a = PrettyUsing (StrategyFor tags a) a
 
-type VerboseTags = 'Unnamed ('ShortVectors ('As 'Internal))
+type VerboseTags = 'Unnamed ('StandardBuiltins ('ShortVectors ('As 'Internal)))
 
-type ExternalTags = 'Named ('ShortVectors ('As 'External))
+type ExternalTags = 'Named ('StandardBuiltins ('ShortVectors ('As 'External)))
 
-type FriendlyTags = 'Named ('Cleaned ('As 'External))
+type FriendlyTags = 'Named ('StandardBuiltins ('Cleaned ('As 'External)))
 
 type PrettyVerbose a = PrettyWith VerboseTags (a `In` NoCtx)
 
@@ -404,19 +414,19 @@ instance
 
 instance
   (PrettyUsing rest (D.Expr Builtin)) =>
-  PrettyUsing ('SetupContext rest) (D.Expr Builtin `In` NoCtx)
+  PrettyUsing ('AlterContext rest) (D.Expr Builtin `In` NoCtx)
   where
   prettyUsing (e, ()) = prettyUsing @rest e
 
 instance
   (PrettyUsing rest (D.Arg Builtin)) =>
-  PrettyUsing ('SetupContext rest) (D.Arg Builtin `In` NoCtx)
+  PrettyUsing ('AlterContext rest) (D.Arg Builtin `In` NoCtx)
   where
   prettyUsing (e, ()) = prettyUsing @rest e
 
 instance
   (PrettyUsing rest (D.Binder Builtin)) =>
-  PrettyUsing ('SetupContext rest) (D.Binder Builtin `In` NoCtx)
+  PrettyUsing ('AlterContext rest) (D.Binder Builtin `In` NoCtx)
   where
   prettyUsing (e, ()) = prettyUsing @rest e
 
@@ -435,64 +445,58 @@ instance
 
 -- Expr
 
-instance (PrettyUsing rest (D.Expr Builtin), PrintableBuiltin builtin) => PrettyUsing ('DescopeNaively rest) (Expr builtin `In` ctx) where
+instance (PrettyUsing rest (D.Expr builtin), PrintableBuiltin builtin) => PrettyUsing ('DescopeNaively rest) (Expr builtin `In` ctx) where
   prettyUsing (e, _ctx) = prettyUsing @rest $ descopeExprNaively e
 
 instance
-  (PrettyUsing rest (D.Arg Builtin), PrintableBuiltin builtin) =>
+  (PrettyUsing rest (D.Arg builtin), PrintableBuiltin builtin) =>
   PrettyUsing ('DescopeNaively rest) (Arg builtin `In` ctx)
   where
   prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeExprNaively e
 
 instance
-  (PrettyUsing rest (D.Binder Builtin), PrintableBuiltin builtin) =>
+  (PrettyUsing rest (D.Binder builtin), PrintableBuiltin builtin) =>
   PrettyUsing ('DescopeNaively rest) (Binder builtin `In` ctx)
   where
   prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeExprNaively e
 
 instance
-  (PrettyUsing rest (D.Decl Builtin), PrintableBuiltin builtin) =>
+  (PrettyUsing rest (D.Decl builtin), PrintableBuiltin builtin) =>
   PrettyUsing ('DescopeNaively rest) (Decl builtin `In` ctx)
   where
   prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeExprNaively e
 
 instance
-  (PrettyUsing rest (D.Module Builtin), PrintableBuiltin builtin) =>
+  (PrettyUsing rest (D.Module builtin), PrintableBuiltin builtin) =>
   PrettyUsing ('DescopeNaively rest) (Module builtin `In` ctx)
   where
   prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeExprNaively e
 
 -- Value
 
-instance (PrettyUsing rest (D.Expr Builtin), PrintableBuiltin builtin) => PrettyUsing ('DescopeNaively rest) (Value builtin `In` ctx) where
+instance
+  (PrettyUsing rest (D.Expr builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('DescopeNaively rest) (ForcedValue builtin `In` ctx)
+  where
+  prettyUsing (e, _ctx) = prettyUsing @rest $ descopeForcedValueNaively @builtin e
+
+instance
+  (PrettyUsing rest (D.Expr builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('DescopeNaively rest) (Value builtin `In` ctx)
+  where
   prettyUsing (e, _ctx) = prettyUsing @rest $ descopeValueNaively @builtin e
 
 instance
-  (PrettyUsing rest (D.Arg Builtin), PrintableBuiltin builtin) =>
+  (PrettyUsing rest (D.Arg builtin), PrintableBuiltin builtin) =>
   PrettyUsing ('DescopeNaively rest) (VArg builtin `In` ctx)
   where
   prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeValueNaively e
 
 instance
-  (PrettyUsing rest (D.Binder Builtin), PrintableBuiltin builtin) =>
+  (PrettyUsing rest (D.Binder builtin), PrintableBuiltin builtin) =>
   PrettyUsing ('DescopeNaively rest) (VBinder builtin `In` ctx)
   where
-  prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeValueNaively e
-
-instance
-  (PrettyUsing rest (D.Decl Builtin), PrintableBuiltin builtin) =>
-  PrettyUsing ('DescopeNaively rest) (VDecl builtin `In` ctx)
-  where
-  prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeValueNaively e
-
-instance
-  ( PrettyUsing rest (D.Module Builtin),
-    PrintableBuiltin builtin,
-    Debug ('DescopeNaively rest) "Resolve LinearExpr"
-  ) =>
-  PrettyUsing ('DescopeNaively rest) (VProg builtin `In` ctx)
-  where
-  prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeValueNaively e
+  prettyUsing (e, _ctx) = prettyUsing @rest $ fmap (descopeValueNaively . Unforced) e
 
 --------------------------------------------------------------------------------
 -- Value
@@ -509,11 +513,8 @@ instance
       go = \case
         [] -> []
         (binder, value) : rs -> do
-          let valueDoc = goEntry value
+          let valueDoc = prettyUsing @rest (value, ctx)
           (pretty (nameOf binder) <+> "=" <+> valueDoc) : go rs
-
-      goEntry :: Value builtin -> Doc a
-      goEntry v = prettyUsing @rest (v, ctx)
 
 instance
   ( PrettyUsing rest (Value builtin `In` ctx),
@@ -539,59 +540,59 @@ instance
 --------------------------------------------------------------------------------
 -- Query variables
 
-variableValue :: (VariableLike variable) => variable -> Value Builtin
+variableValue :: (VariableLike variable) => variable -> ForcedValue Builtin
 variableValue var = VBoundVar (toLv var) []
 
 instance
-  (PrettyUsing rest (Value Builtin `In` ctx)) =>
+  (PrettyUsing rest (ForcedValue Builtin `In` ctx)) =>
   PrettyUsing rest (SliceVariable `In` ctx)
   where
   prettyUsing (var, ctx) = prettyUsing @rest (variableValue var, ctx)
 
 instance
-  (PrettyUsing rest (Value Builtin `In` ctx)) =>
+  (PrettyUsing rest (ForcedValue Builtin `In` ctx)) =>
   PrettyUsing rest (NestedSliceVariable `In` ctx)
   where
   prettyUsing (var, ctx) = prettyUsing @rest (variableValue var, ctx)
 
 instance
-  (PrettyUsing rest (Value Builtin `In` ctx)) =>
+  (PrettyUsing rest (ForcedValue Builtin `In` ctx)) =>
   PrettyUsing rest (UserSliceVariable `In` ctx)
   where
   prettyUsing (var, ctx) = prettyUsing @rest (variableValue var, ctx)
 
 instance
-  (PrettyUsing rest (Value Builtin `In` ctx)) =>
+  (PrettyUsing rest (ForcedValue Builtin `In` ctx)) =>
   PrettyUsing rest (NetworkIOVariable `In` ctx)
   where
   prettyUsing (var, ctx) = prettyUsing @rest (variableValue var, ctx)
 
 instance
-  (PrettyUsing rest (Value Builtin `In` ctx)) =>
+  (PrettyUsing rest (ForcedValue Builtin `In` ctx)) =>
   PrettyUsing rest (NetworkIOElementVariable `In` ctx)
   where
   prettyUsing (var, ctx) = prettyUsing @rest (variableValue var, ctx)
 
 instance
-  (PrettyUsing rest (Value Builtin `In` ctx)) =>
+  (PrettyUsing rest (ForcedValue Builtin `In` ctx)) =>
   PrettyUsing rest (TensorVariable `In` ctx)
   where
   prettyUsing (var, ctx) = prettyUsing @rest (variableValue var, ctx)
 
 instance
-  (PrettyUsing rest (Value Builtin `In` ctx)) =>
+  (PrettyUsing rest (ForcedValue Builtin `In` ctx)) =>
   PrettyUsing rest (UserTensorVariable `In` ctx)
   where
   prettyUsing (var, ctx) = prettyUsing @rest (variableValue var, ctx)
 
 instance
-  (PrettyUsing rest (Value Builtin `In` ctx)) =>
+  (PrettyUsing rest (ForcedValue Builtin `In` ctx)) =>
   PrettyUsing rest (NetworkInputTensorVariable `In` ctx)
   where
   prettyUsing (var, ctx) = prettyUsing @rest (variableValue var, ctx)
 
 instance
-  (PrettyUsing rest (Value Builtin `In` ctx)) =>
+  (PrettyUsing rest (ForcedValue Builtin `In` ctx)) =>
   PrettyUsing rest (NetworkOutputTensorVariable `In` ctx)
   where
   prettyUsing (var, ctx) = prettyUsing @rest (variableValue var, ctx)
@@ -634,38 +635,52 @@ instance
 -- Expr
 
 instance
-  (PrettyUsing rest (D.Expr Builtin), PrintableBuiltin builtin) =>
+  (PrettyUsing rest (D.Expr builtin), PrintableBuiltin builtin) =>
   PrettyUsing ('DescopeWithNames rest) (Expr builtin `In` NamedBoundCtx)
   where
-  prettyUsing (e, ctx) = prettyUsing @rest $ descopeExpr ctx e
+  prettyUsing (e, ctx) = prettyUsing @rest $ descopeExprNamed ctx e
 
 instance
-  (PrettyUsing rest (D.Arg Builtin), PrintableBuiltin builtin) =>
+  (PrettyUsing rest (D.Arg builtin), PrintableBuiltin builtin) =>
   PrettyUsing ('DescopeWithNames rest) (Arg builtin `In` NamedBoundCtx)
   where
-  prettyUsing (e, ctx) = prettyUsing @rest $ fmap (descopeExpr ctx) e
+  prettyUsing (e, ctx) = prettyUsing @rest $ fmap (descopeExprNamed ctx) e
 
 instance
-  (PrettyUsing rest (D.Binder Builtin), PrintableBuiltin builtin) =>
+  (PrettyUsing rest (D.Binder builtin), PrintableBuiltin builtin) =>
   PrettyUsing ('DescopeWithNames rest) (Binder builtin `In` NamedBoundCtx)
   where
-  prettyUsing (e, ctx) = prettyUsing @rest $ fmap (descopeExpr ctx) e
+  prettyUsing (e, ctx) = prettyUsing @rest $ fmap (descopeExprNamed ctx) e
 
 instance
-  (PrettyUsing rest (D.Decl Builtin), PrintableBuiltin builtin) =>
-  PrettyUsing ('DescopeWithNames rest) (Decl builtin `In` NoCtx)
+  (PrettyUsing rest (D.Decl builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('DescopeWithNames rest) (Decl builtin)
   where
-  prettyUsing (e, ()) = prettyUsing @rest $ descopeDecl e
+  prettyUsing e = prettyUsing @rest $ descopeDecl e
 
 instance
-  (PrettyUsing rest (D.Module Builtin), PrintableBuiltin builtin) =>
-  PrettyUsing ('DescopeWithNames rest) (Module builtin `In` NoCtx)
+  (PrettyUsing rest (D.Module builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('DescopeWithNames rest) (Module builtin)
   where
-  prettyUsing (e, ()) = prettyUsing @rest $ mapModuleDecls descopeDecl e
+  prettyUsing e = prettyUsing @rest $ mapModuleDecls descopeDecl e
 
--- Value
+instance
+  (PrettyUsing rest (D.Module builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('DescopeWithNames rest) (Prog builtin)
+  where
+  prettyUsing (Main ds) = prettyUsing @rest $ mapModuleDecls descopeDecl (Module mempty ds)
 
--- LinearExpr
+instance
+  (PrettyUsing rest (D.Expr builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('DescopeWithNames rest) (Value builtin `In` NamedBoundCtx)
+  where
+  prettyUsing (e, ctx) = prettyUsing @rest $ descopeValueNamed ctx e
+
+instance
+  (PrettyUsing rest (D.Expr builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('DescopeWithNames rest) (ForcedValue builtin `In` NamedBoundCtx)
+  where
+  prettyUsing (e, ctx) = prettyUsing @rest $ descopeForcedValueNamed ctx e
 
 instance
   (VariableLike variable, ConstantLike constant, PrettyUsing rest (constant `In` NamedBoundCtx)) =>
@@ -743,45 +758,53 @@ instance (Pretty a) => PrettyUsing 'Pretty (a `In` ctx) where
 -- Instances for normalised types
 
 instance
-  (PrettyUsing rest (Expr Builtin), ConvertableBuiltin builtin Builtin) =>
+  (PrettyUsing rest (Expr builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('QuoteValue rest) (ForcedValue builtin)
+  where
+  prettyUsing e = prettyUsing @rest $ unnormalise @(ForcedValue builtin) @(Expr builtin) 0 e
+
+instance
+  (PrettyUsing rest (Expr builtin), PrintableBuiltin builtin) =>
   PrettyUsing ('QuoteValue rest) (Value builtin)
   where
-  prettyUsing e = prettyUsing @rest $ unnormalise @(Value builtin) @(Expr Builtin) 0 e
+  prettyUsing e = prettyUsing @rest $ unnormalise @(Value builtin) @(Expr builtin) 0 e
 
 instance
-  (PrettyUsing rest (Arg Builtin), ConvertableBuiltin builtin Builtin) =>
+  (PrettyUsing rest (Arg builtin), PrintableBuiltin builtin) =>
   PrettyUsing ('QuoteValue rest) (VArg builtin)
   where
-  prettyUsing e = prettyUsing @rest $ fmap (unnormalise @(Value builtin) @(Expr Builtin) 0) e
+  prettyUsing e = prettyUsing @rest $ fmap (unnormalise @(Value builtin) @(Expr builtin) 0) e
 
 instance
-  (PrettyUsing rest (Binder Builtin), ConvertableBuiltin builtin Builtin) =>
+  (PrettyUsing rest (Binder builtin), PrintableBuiltin builtin) =>
   PrettyUsing ('QuoteValue rest) (VBinder builtin)
   where
-  prettyUsing e = prettyUsing @rest $ fmap (unnormalise @(Value builtin) @(Expr Builtin) 0) e
+  prettyUsing e = prettyUsing @rest $ fmap (unnormalise @(Value builtin) @(Expr builtin) 0 . Unforced) e
 
 instance
-  (PrettyUsing rest (Decl Builtin), ConvertableBuiltin builtin Builtin) =>
-  PrettyUsing ('QuoteValue rest) (VDecl builtin)
-  where
-  prettyUsing e = prettyUsing @rest $ fmap (unnormalise @(Value builtin) @(Expr Builtin) 0) e
-
-instance
-  (PrettyUsing rest (Expr Builtin `In` NamedBoundCtx), ConvertableBuiltin builtin Builtin) =>
+  (PrettyUsing rest (Expr builtin `In` NamedBoundCtx), PrintableBuiltin builtin) =>
   PrettyUsing ('QuoteValue rest) (Value builtin `In` NamedBoundCtx)
   where
   prettyUsing (e, ctx) = do
-    let e' = unnormalise @(Value builtin) @(Expr Builtin) (Lv $ length ctx) e
+    let e' = unnormalise @(Value builtin) @(Expr builtin) (Lv $ length ctx) e
     prettyUsing @rest (e', ctx)
 
 instance
-  (PrettyUsing rest (Arg builtin `In` NamedBoundCtx), ConvertableBuiltin builtin Builtin) =>
+  (PrettyUsing rest (Expr builtin `In` NamedBoundCtx), PrintableBuiltin builtin) =>
+  PrettyUsing ('QuoteValue rest) (ForcedValue builtin `In` NamedBoundCtx)
+  where
+  prettyUsing (e, ctx) = do
+    let e' = unnormalise @(ForcedValue builtin) @(Expr builtin) (Lv $ length ctx) e
+    prettyUsing @rest (e', ctx)
+
+instance
+  (PrettyUsing rest (Arg builtin `In` NamedBoundCtx), PrintableBuiltin builtin) =>
   PrettyUsing ('QuoteValue rest) (Arg builtin `In` NamedBoundCtx)
   where
   prettyUsing (e, ctx) = prettyUsing @rest (e, ctx)
 
 instance
-  (PrettyUsing rest (Expr builtin `In` NamedBoundCtx), ConvertableBuiltin builtin Builtin) =>
+  (PrettyUsing rest (Expr builtin `In` NamedBoundCtx), PrintableBuiltin builtin) =>
   PrettyUsing ('QuoteValue rest) (Expr builtin `In` NamedBoundCtx)
   where
   prettyUsing (e, ctx) = prettyUsing @rest (e, ctx)
@@ -794,6 +817,7 @@ instance PrettyUsing rest (GenericBinder ()) where
 
 instance
   ( PrettyUsing rest (Expr builtin `In` NamedBoundCtx),
+    PrettyUsing rest (VType builtin `In` NamedBoundCtx),
     PrettyUsing rest (Arg builtin `In` NamedBoundCtx)
   ) =>
   PrettyUsing rest (ArgInsertionProblem builtin `In` NamedBoundCtx)
@@ -816,7 +840,7 @@ prettyConstraint ctx constraint =
       ]
 
 instance
-  (PrettyUsing rest (Expr builtin `In` NamedBoundCtx)) =>
+  (PrettyUsing rest (Value builtin `In` NamedBoundCtx)) =>
   PrettyUsing rest (UnificationConstraint builtin `In` ConstraintContext builtin)
   where
   prettyUsing (Unify _ e1 e2, ctx) = do
@@ -825,14 +849,14 @@ instance
     prettyConstraint ctx (e1' <+> "~" <+> e2')
 
 instance
-  ( PrettyUsing rest (Expr builtin `In` NamedBoundCtx)
+  ( PrettyUsing rest (ForcedValue builtin `In` NamedBoundCtx)
   ) =>
   PrettyUsing rest (InstanceConstraint builtin `In` ConstraintContext builtin)
   where
   prettyUsing (Resolve _ solution _ _ goal, ctx) = do
     let nameCtx = namedBoundCtxOf ctx
     let solution' = pretty solution
-    let expr' = prettyUsing @rest (goalExpr goal, nameCtx)
+    let expr' = prettyUsing @rest (forcedGoalValue goal, nameCtx)
     prettyConstraint ctx (solution' <+> "<=" <+> expr')
 
 instance
@@ -867,7 +891,9 @@ instance
   prettyUsing (candidate, ctx) = prettyUsing @rest (candidateExpr candidate, toNamedBoundCtx ctx)
 
 instance
-  (PrettyUsing rest (Type builtin `In` NamedBoundCtx)) =>
+  ( PrettyUsing rest (Expr builtin `In` NamedBoundCtx),
+    PrettyUsing rest (Value builtin `In` NamedBoundCtx)
+  ) =>
   PrettyUsing rest (MetaInfo builtin `In` NoCtx)
   where
   prettyUsing (MetaInfo {..}, ()) = do
@@ -875,7 +901,7 @@ instance
     let typeDoc = prettyUsing @rest (metaType, nameCtx)
     let solutionDoc = case metaSolution of
           Nothing -> "?"
-          Just solution -> prettyUsing @rest (unnormalised solution, nameCtx)
+          Just solution -> prettyUsing @rest (solution, nameCtx)
     align $
       prettyMapEntries
         [ ("solution", solutionDoc),
@@ -1064,6 +1090,39 @@ instance
     let x' = prettyUsing @restKey (x, ctx)
     let y' = prettyUsing @restValue (y, ctx)
     parens (x' <> "," <> y')
+
+--------------------------------------------------------------------------------
+-- Conversion of builtins
+
+instance
+  (PrettyUsing rest (D.Expr Builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('ConvertBuiltins rest) (D.Expr builtin)
+  where
+  prettyUsing = prettyUsing @rest . convertBuiltins
+
+instance
+  (PrettyUsing rest (D.Arg Builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('ConvertBuiltins rest) (D.Arg builtin)
+  where
+  prettyUsing = prettyUsing @rest . fmap convertBuiltins
+
+instance
+  (PrettyUsing rest (D.Binder Builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('ConvertBuiltins rest) (D.Binder builtin)
+  where
+  prettyUsing = prettyUsing @rest . fmap convertBuiltins
+
+instance
+  (PrettyUsing rest (D.Decl Builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('ConvertBuiltins rest) (D.Decl builtin)
+  where
+  prettyUsing = prettyUsing @rest . fmap convertBuiltins
+
+instance
+  (PrettyUsing rest (D.Module Builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('ConvertBuiltins rest) (D.Module builtin)
+  where
+  prettyUsing = prettyUsing @rest . fmap convertBuiltins
 
 --------------------------------------------------------------------------------
 -- Conversion to BNFC representation

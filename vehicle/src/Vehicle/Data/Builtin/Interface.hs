@@ -28,6 +28,15 @@ data Accessor expr v = Access
 idAccessor :: Accessor expr expr
 idAccessor = Access Just id
 
+applyAccessor :: (Eq v) => Accessor expr v -> v -> Accessor expr ()
+applyAccessor accessor value =
+  Access
+    { getExpr = \expr -> case getExpr accessor expr of
+        Just v | v == value -> Just ()
+        _ -> Nothing,
+      mkExpr = \() -> mkExpr accessor value
+    }
+
 --------------------------------------------------------------------------------
 -- Accessor classes for builtins
 --------------------------------------------------------------------------------
@@ -44,10 +53,10 @@ class BuiltinHasBoolType builtin where
 class BuiltinHasBoolLiterals builtin where
   accessBoolTensorLitBuiltin :: Accessor builtin (Tensor Bool)
 
-  accessNotBuiltin :: Accessor builtin ()
-  accessAndBuiltin :: Accessor builtin ()
-  accessOrBuiltin :: Accessor builtin ()
-  accessImpliesBuiltin :: Accessor builtin ()
+  accessNotTensorBuiltin :: Accessor builtin ()
+  accessAndTensorBuiltin :: Accessor builtin ()
+  accessOrTensorBuiltin :: Accessor builtin ()
+  accessImpliesTensorBuiltin :: Accessor builtin ()
   accessReduceAndBuiltin :: Accessor builtin ()
   accessReduceOrBuiltin :: Accessor builtin ()
   accessIfBuiltin :: Accessor builtin ()

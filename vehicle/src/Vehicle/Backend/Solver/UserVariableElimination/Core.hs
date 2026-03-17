@@ -137,12 +137,12 @@ addNetworkApplicationToGlobalCtx name networkInfo arg = do
   -- Create variables representing the input of the network.
   let inputVarName = createNetworkVarName name applicationNumber Input
   inputVar <- toSliceVar <$> addTensorBinderToContextPermenantly p inputVarName (inputShape networkInfo)
-  let inputVarExpr = VBoundVar (toLv inputVar) []
+  let inputVarExpr = Forced $ VBoundVar (toLv inputVar) []
 
   -- Create variables representing the output of the network.
   let outputVarName = createNetworkVarName name applicationNumber Output
   outputVar <- toSliceVar <$> addTensorBinderToContextPermenantly p outputVarName (outputShape networkInfo)
-  let outputVarExpr = VBoundVar (toLv outputVar) []
+  let outputVarExpr = Forced $ VBoundVar (toLv outputVar) []
 
   -- Create the object to store information about the application
   let appInfo =

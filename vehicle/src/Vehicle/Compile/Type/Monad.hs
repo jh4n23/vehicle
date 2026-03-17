@@ -7,7 +7,6 @@ module Vehicle.Compile.Type.Monad
     adoptHypotheticalState,
     -- Meta variables
     freshMetaExpr,
-    freshSolutionMeta,
     getMetaType,
     getMetaCtx,
     getMetaProvenance,
@@ -30,48 +29,52 @@ module Vehicle.Compile.Type.Monad
     setUnificationConstraints,
     addUnificationConstraints,
     addInstanceToInstanceDatabase,
-    TelescopeType (..),
     instantiateTelescope,
     -- Other
     clearMetaCtx,
     logUnsolvedUnknowns,
     findFirstConstraint,
     checkAllConstraintsSolved,
+    deepForceValue,
   )
 where
 
 import Control.Monad (unless, when)
 import Control.Monad.Except (MonadError (..), runExceptT)
 import Control.Monad.Trans.Except (ExceptT)
+import Control.Monad.Writer (MonadTrans (..), MonadWriter, WriterT (..))
 import Data.List (partition, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (isJust)
 import Data.Proxy (Proxy (..))
 import Vehicle.Compile.Error (CompileError (..), TypingError (..), compilerDeveloperError)
-import Vehicle.Compile.Normalise.NBE
+import Vehicle.Compile.Normalise.Core
+import Vehicle.Compile.Normalise.NBE (forceValue)
+import Vehicle.Compile.Normalise.Quote (Quote (..), unnormalise)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (PrettyExternal, prettyExternal, prettyVerbose)
 import Vehicle.Compile.Type.Core
-import Vehicle.Compile.Type.Force (ForcedExpr (..), forceHead)
 import Vehicle.Compile.Type.Meta (MetaSet)
 import Vehicle.Compile.Type.Meta.Map qualified as MetaMap
 import Vehicle.Compile.Type.Meta.Variable (MetaInfo (..), addMetaSolution)
 import Vehicle.Compile.Type.Monad.Class
 import Vehicle.Compile.Type.Monad.Instance
-import Vehicle.Data.Builtin.Interface.Normalise (NormalisableBuiltin)
 import Vehicle.Data.Builtin.Interface.Print (PrintableBuiltin)
 import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin (..))
 import Vehicle.Data.Code.ModuleInterface
 import Vehicle.Data.Code.Value
 import Vehicle.Data.Variable.Bound.Context.Generic
+import Vehicle.Data.Variable.Bound.Context.Name (NameBoundContextT, runNameBoundContextT)
+import Vehicle.Data.Variable.Bound.Context.Name.Class
 import Vehicle.Data.Variable.Bound.Context.Name.Core (NamedBoundCtx)
+import Vehicle.Data.Variable.Free.Context.Class (MonadFreeContext (..))
 
 runTypeCheckerTInitially ::
   (Monad m, TypableBuiltin builtin) =>
   InstanceDatabase builtin ->
   ImportedModuleContext builtin ->
   TypeCheckerT builtin m a ->
-  m (a, ModuleTypingInterface builtin, FreeEnv builtin)
+  m (a, ModuleTypingInterface builtin, FreeCtx builtin)
 runTypeCheckerTInitially builtinInstances importedCtx e = do
   let state = emptyTypeCheckerState builtinInstances importedCtx
   (result, internalState) <- runTypeCheckerT state e
@@ -112,14 +115,6 @@ freshMetaExpr p t boundCtx = do
   let ctx = if useDependentMetas (Proxy @builtin) then boundCtx else mempty
   snd <$> freshMeta p t ctx
 
-freshSolutionMeta ::
-  (MonadTypeChecker builtin m) =>
-  Provenance ->
-  Type builtin ->
-  BoundCtx (Type builtin) ->
-  m (MetaID, Expr builtin)
-freshSolutionMeta = freshMeta
-
 createFreshApplicationConstraint ::
   forall builtin m.
   (MonadTypeChecker builtin m) =>
@@ -129,8 +124,8 @@ createFreshApplicationConstraint ::
   m (Expr builtin, Type builtin)
 createFreshApplicationConstraint ctx problem blockingMetas = do
   let p = provenanceOf $ originalFun problem
-  (finalTypeID, finalType) <- freshSolutionMeta p (TypeUniverse p 0) ctx
-  (finalExprID, finalExpr) <- freshSolutionMeta p finalType ctx
+  (finalTypeID, finalType) <- freshMeta p (Universe mempty 0) ctx
+  (finalExprID, finalExpr) <- freshMeta p finalType ctx
 
   let constraint =
         InferArgs
@@ -148,7 +143,7 @@ createFreshApplicationConstraint ctx problem blockingMetas = do
 -- derived from another constraint).
 createFreshInstanceConstraint ::
   forall builtin m.
-  (MonadTypeChecker builtin m, NormalisableBuiltin builtin) =>
+  (MonadTypeChecker builtin m) =>
   Bool ->
   BoundCtx (Type builtin) ->
   Provenance ->
@@ -157,11 +152,12 @@ createFreshInstanceConstraint ::
   Type builtin ->
   m (Expr builtin)
 createFreshInstanceConstraint auxiliaryConstraint boundCtx p origin relevance tcExpr = do
-  (metaID, metaExpr) <- freshSolutionMeta p tcExpr boundCtx
+  (metaID, metaExpr) <- freshMeta p tcExpr boundCtx
 
   context <- createFreshConstraintCtx p boundCtx
-  goal <- parseInstanceGoal (toNamedBoundCtx boundCtx) tcExpr
-  let constraint = WithContext (Resolve origin metaID relevance Nothing goal) context
+  goal <- parseInstanceGoal (toNamedBoundCtx boundCtx) (thunkifyExpr (boundContextToEnv boundCtx) tcExpr)
+  let newConstraint = Resolve origin metaID relevance Nothing goal
+  let constraint = WithContext newConstraint context
 
   if auxiliaryConstraint
     then addAuxiliaryInstanceConstraints [constraint]
@@ -174,11 +170,12 @@ createDerivedInstanceConstraint ::
   (MonadTypeChecker builtin m) =>
   (ConstraintContext builtin, InstanceConstraintOrigin builtin) ->
   Relevance ->
-  Expr builtin ->
+  Value builtin ->
   m (Expr builtin, WithContext (InstanceConstraint builtin))
 createDerivedInstanceConstraint (ctx, origin) r t = do
   let p = provenanceOf ctx
-  (metaID, metaExpr) <- freshSolutionMeta p t (boundContextOf ctx)
+  let newTypeClassExpr = quote p (contextDBLevel ctx) t
+  (metaID, metaExpr) <- freshMeta p newTypeClassExpr (boundContextOf ctx)
   goal <- parseInstanceGoal (namedBoundCtxOf ctx) t
   let newConstraint =
         Resolve
@@ -192,26 +189,30 @@ createDerivedInstanceConstraint (ctx, origin) r t = do
   return (metaExpr, WithContext newConstraint newCtx)
 
 parseInstanceGoal ::
-  forall builtin m.
   (MonadTypeChecker builtin m) =>
   NamedBoundCtx ->
-  Expr builtin ->
+  Value builtin ->
   m (InstanceGoal builtin)
-parseInstanceGoal ctx originalValue = go [] originalValue
+parseInstanceGoal ctx originalValue =
+  runNameBoundContextT ctx $ go [] originalValue
   where
-    go :: Telescope builtin -> Expr builtin -> m (InstanceGoal builtin)
+    go ::
+      (MonadTypeChecker builtin m, MonadReadableNameContext m) =>
+      Telescope builtin ->
+      Value builtin ->
+      m (InstanceGoal builtin)
     go telescope expr = do
-      (forcedExpr, _) <- forceHead ctx expr
+      forcedExpr <- forceValue expr
       case forcedExpr of
-        FPi _ binder _body
+        VPi binder _body
           | not (isExplicit binder) -> developerError "Instance goals with telescopes not yet supported"
-        FBuiltin _ b spine -> return $ InstanceGoal telescope (Right b) spine
-        FFreeVar _ b spine -> return $ InstanceGoal telescope (Left b) spine
+        VBuiltin b spine -> return $ InstanceGoal telescope (Right b) spine
+        VFreeVar b spine -> return $ InstanceGoal telescope (Left b) spine
         _ -> developerError $ "Malformed instance goal" <+> prettyVerbose originalValue
 
 addInstanceToInstanceDatabase ::
   forall builtin m.
-  (MonadTypeChecker builtin m) =>
+  (MonadTypeChecker builtin m, TypableBuiltin builtin) =>
   Decl builtin ->
   Maybe InstancePriority ->
   m ()
@@ -235,7 +236,7 @@ addInstanceToInstanceDatabase decl priority =
 
 findValidInstanceHead ::
   forall builtin m.
-  (MonadTypeChecker builtin m) =>
+  (MonadTypeChecker builtin m, TypableBuiltin builtin) =>
   DeclProvenance ->
   InstanceCandidate builtin ->
   m (InstanceHead builtin)
@@ -245,7 +246,7 @@ findValidInstanceHead declProv candidate = do
     Left _err -> throwError $ TypingError $ InvalidInstanceHead declProv expr
     Right instanceHead -> case instanceHead of
       Left typeClassIdent -> do
-        typeClassDecl <- getDecl (Proxy @builtin) typeClassIdent
+        typeClassDecl <- getDeclEntry (Proxy @builtin) typeClassIdent
         unless (isTypeClassDecl typeClassDecl) $ do
           throwError $ TypingError $ NonTypeClassInstanceHead (Proxy @builtin) declProv typeClassIdent
         return instanceHead
@@ -253,7 +254,7 @@ findValidInstanceHead declProv candidate = do
 
 solveMeta ::
   forall builtin m.
-  (MonadTypeChecker builtin m, NormalisableBuiltin builtin) =>
+  (MonadTypeChecker builtin m) =>
   MetaID ->
   Expr builtin ->
   BoundCtx (Type builtin) ->
@@ -267,7 +268,7 @@ solveMeta meta solution solutionCtx = do
           <+> pretty meta
           <+> "already solved as"
           <+> line
-          <> indent 2 (squotes (prettyVerbose (unnormalised existing)))
+          <> indent 2 (squotes (prettyVerbose existing))
           <> line
           <> "but is being re-solved as"
             <+> line
@@ -276,8 +277,6 @@ solveMeta meta solution solutionCtx = do
           <> "in context" <+> pretty (toNamedBoundCtx solutionCtx)
     Nothing -> do
       let abstractedSolution = abstractOverCtx (metaCtx metaInfo) solution
-      let env = boundContextToEnv solutionCtx
-      gluedSolution <- Glued abstractedSolution <$> eval (toNamedBoundCtx solutionCtx) env abstractedSolution
 
       logDebug MaxDetail $
         "solved"
@@ -287,7 +286,7 @@ solveMeta meta solution solutionCtx = do
 
       modifyTypeCheckerDeclState $ \state ->
         state
-          { metaVariableCtx = addMetaSolution gluedSolution meta (metaVariableCtx state),
+          { metaVariableCtx = addMetaSolution abstractedSolution meta (metaVariableCtx state),
             solvedMetaState = registerSolvedMeta meta (solvedMetaState state)
           }
 
@@ -330,12 +329,12 @@ runConstraintSolver getConstraints setConstraints attemptToSolveConstraint topLe
 
               loop (loopNumber + 1)
 
-logUnsolvedUnknowns :: forall builtin m. (MonadTypeChecker builtin m, NormalisableBuiltin builtin) => Proxy builtin -> m ()
+logUnsolvedUnknowns :: forall builtin m. (MonadTypeChecker builtin m) => Proxy builtin -> m ()
 logUnsolvedUnknowns _proxy = do
   logDebugM MaxDetail $ do
     maybeDecl <- getCurrentDecl @builtin
     metaVarCtx <- getMetaVariableCtx @builtin
-    updatedMetaVarCtx <- substMetaVariables metaVarCtx
+    updatedMetaVarCtx <- substMetaVariables @builtin metaVarCtx
 
     unsolvedConstraints <- getActiveConstraints @builtin
 
@@ -392,7 +391,7 @@ findFirstConstraint p xs = (\(found, seen, unseen) -> (found, unseen <> seen)) <
         | otherwise -> fmap (\(found, seen, unseen) -> (found, c : seen, unseen)) (go cs)
 
 checkAllConstraintsSolved ::
-  (MonadTypeChecker builtin m, Eq builtin, NormalisableBuiltin builtin) =>
+  (MonadTypeChecker builtin m, TypableBuiltin builtin) =>
   Proxy builtin ->
   m [Contextualised constraint (ConstraintContext builtin)] ->
   (constraint -> Constraint builtin) ->
@@ -405,30 +404,53 @@ checkAllConstraintsSolved _ getConstraints toConstraint = do
       let failedConstraints = mapObject toConstraint <$> (c :| cs)
       throwError $ TypingError $ UnsolvedConstraints failedConstraints
 
-data TelescopeType
-  = InstanceTelescope
-  | RecordTelescope
-
 instantiateTelescope ::
+  forall m builtin.
   (MonadTypeChecker builtin m, TypableBuiltin builtin) =>
-  TelescopeType ->
   (Relevance -> Type builtin -> m (Expr builtin)) ->
   BoundCtx (Type builtin) ->
   (Type builtin, Expr builtin) ->
-  m (Type builtin, Expr builtin, [Arg builtin])
-instantiateTelescope telescopeType createFreshInstance boundCtx = \case
-  (Pi _ piBinder exprBody, Lam _ _solutionBinder solutionBody) -> do
-    let binderType = typeOf piBinder
-    newArg <- case visibilityOf piBinder of
-      Explicit {} -> case telescopeType of
-        InstanceTelescope -> compilerDeveloperError "Should not have an explicit argument in instance goal telescope"
-        RecordTelescope -> freshMetaExpr (provenanceOf piBinder) binderType boundCtx
-      Implicit {} ->
-        freshMetaExpr (provenanceOf piBinder) binderType boundCtx
-      Instance {} -> do
-        createFreshInstance (relevanceOf piBinder) binderType
-    let exprBodyResult = newArg `substDBInto` exprBody
-    let solutionBodyResult = newArg `substDBInto` solutionBody
-    (typ', body', args) <- instantiateTelescope telescopeType createFreshInstance boundCtx (exprBodyResult, solutionBodyResult)
-    return (typ', body', argFromBinder piBinder newArg : args)
-  (typ, body) -> return (typ, body, [])
+  m (VType builtin, Expr builtin, [Arg builtin])
+instantiateTelescope createFreshInstance boundCtx (telescopeType, telescopeBody) = do
+  let telescopeTypeValue = thunkifyExpr (boundContextToEnv boundCtx) telescopeType
+  let telescopeBodyValue = thunkifyExpr (boundContextToEnv boundCtx) telescopeBody
+  runNameBoundContextT (toNamedBoundCtx boundCtx) $ go (telescopeTypeValue, telescopeBodyValue)
+  where
+    go ::
+      (VType builtin, Value builtin) ->
+      NameBoundContextT m (VType builtin, Expr builtin, [Arg builtin])
+    go (typ, value) = do
+      forcedType <- forceValue typ
+      forcedValue <- forceValue value
+      lv <- getBinderDepth
+      case (forcedType, forcedValue) of
+        (VPi piBinder piClosure, VLam lamBinder lamClosure) -> do
+          let unnormPiBinder = fmap (unnormalise lv) piBinder
+          let binderType = typeOf unnormPiBinder
+          newArg <- case visibilityOf piBinder of
+            Explicit {} -> do
+              compilerDeveloperError "Should not have an explicit argument in instance goal telescope"
+            Implicit {} -> do
+              freshMetaExpr (provenanceOf piBinder) binderType boundCtx
+            Instance {} -> do
+              lift $ createFreshInstance (relevanceOf piBinder) binderType
+          let normNewArg = _
+          let resultType = extendClosure piClosure piBinder normNewArg
+          let resultBody = extendClosure lamClosure lamBinder normNewArg
+          (typ', body', args) <- addNameToContext piBinder $ go (resultType, resultBody)
+          return (typ', body', argFromBinder unnormPiBinder newArg : args)
+        _ -> do
+          let finalBody = unnormalise lv value
+          return (typ, finalBody, [])
+
+deepForceValue :: (MonadTypeChecker builtin m) => Value builtin -> m (ForcedValue builtin, MetaSet)
+deepForceValue value = do
+  forcedValue <- forceValue value
+  runWriterT (deepForceForcedValue forcedValue)
+
+deepForceForcedValue :: (MonadNorm builtin m, MonadWriter MetaSet m) => ForcedValue builtin -> m (ForcedValue builtin)
+deepForceForcedValue = \case
+  VMeta m spine -> _
+  VBuiltin b spine -> _
+  VRecordAcc b _ _ _ -> _
+  value -> return value

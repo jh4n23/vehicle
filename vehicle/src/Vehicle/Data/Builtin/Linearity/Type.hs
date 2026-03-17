@@ -32,6 +32,7 @@ instance TypableBuiltin LinearityBuiltin where
   useDependentMetas _ = False
   isConstructor = isLinearityBuiltinConstructor
   isCastConstraint _ = False
+  coercionArgs = const Nothing
 
 isLinearityBuiltinConstructor :: LinearityBuiltin -> Bool
 isLinearityBuiltinConstructor = \case

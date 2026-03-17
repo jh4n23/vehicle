@@ -1,23 +1,20 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-{-# HLINT ignore "Eta reduce" #-}
 module Vehicle.Data.Builtin.Interface.Normalise where
 
 import Control.Applicative ((<|>))
-import Control.Monad (foldM, zipWithM)
-import Data.List.NonEmpty (NonEmpty)
-import Data.List.NonEmpty qualified as NonEmpty
-import Data.Maybe (fromMaybe, isJust)
-import Vehicle.Compile.Normalise.Quote (Quote (..))
+import Data.Bifunctor (Bifunctor (..))
+import Vehicle.Compile.Normalise.Core (BuiltinEvaluationResult (..))
+import Vehicle.Compile.Normalise.NBE (MonadNorm, forceValue)
 import Vehicle.Compile.Prelude
-import Vehicle.Compile.Print (prettyVerbose)
-import Vehicle.Compile.Type.Force
 import Vehicle.Data.Builtin.Core
 import Vehicle.Data.Builtin.Interface
 import Vehicle.Data.Builtin.Interface.Print (PrintableBuiltin)
+import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Code.Interface
 import Vehicle.Data.Code.Value
-import Vehicle.Data.Tensor (Tensor, TensorShape, at, extendTensor, foldTensor, mapTensor, stack, unstack, zipWithTensor, pattern ConstantTensor, pattern ZeroDimTensor)
+import Vehicle.Data.Tensor (Tensor, TensorDimension, TensorShape, at, foldTensor, mapTensor, stack, unstack, zipWithTensor, pattern ConstantTensor, pattern ZeroDimTensor)
+import Vehicle.Data.Tensor.Traversal
 import Vehicle.Data.Variable.Bound.Context.Name
 
 -- Okay so the important thing to remember about this module is that we have
@@ -34,453 +31,391 @@ import Vehicle.Data.Variable.Bound.Context.Name
 -----------------------------------------------------------------------------
 -- Main method
 
-type MonadNormBuiltin m = MonadLogger m
-
-type Eval builtin m = NamedBoundCtx -> BoundEnv builtin -> Expr builtin -> m (ForcedExpr builtin)
-
--- | A method for evaluating an application.
--- Although there is only one implementation of this type, it needs to be
--- passed around as an argument to avoid dependency cycles between
--- this module and the module in which the general NBE algorithm lives in.
-type EvalApp builtin m = NamedBoundCtx -> Expr builtin -> ForcibleSpine builtin -> m (ForcedExpr builtin)
-
-type StandardBuiltinEvaluationScheme builtin m =
-  NamedBoundCtx ->
-  EvalApp builtin m ->
-  Eval builtin m ->
-  GenericArgs builtin ->
-  m (BuiltinEvaluationResult builtin)
-
-data BuiltinEvaluationResult builtin
-  = Evaluated (ForcedExpr builtin)
-  | Unevaluated (BlockingStatus (ForcedExpr builtin))
-
-data BuiltinEvaluationScheme builtin m
-  = StandardEvaluation (StandardBuiltinEvaluationScheme builtin m)
-  | DerivedEvaluation Identifier
-  | -- The builtin is a type-class operation (should eventually be eliminated)
-    TypeClassEvaluation
-  | Unevaluable
-
--- | A type-class for builtins that can be normalised compositionally.
-class (PrintableBuiltin builtin) => NormalisableBuiltin builtin where
-  evaluationScheme :: (MonadLogger m) => builtin -> BuiltinEvaluationScheme builtin m
-  isCast :: (MonadLogger m) => Provenance -> builtin -> Maybe ([Arg builtin] -> m (expr builtin))
-
-type SimpleStandardBuiltinEvaluation args builtin m =
-  args (ForcibleExpr builtin) ->
-  m (BuiltinEvaluationResult builtin)
-
-simpleEvaluation ::
-  (IsArgs args) =>
-  SimpleStandardBuiltinEvaluation args builtin m ->
-  BuiltinEvaluationScheme builtin m
-simpleEvaluation simpleEval = StandardEvaluation $
-  \ctx evalApp eval args -> do
-    result <- simpleEval _
-    case result of
-      Left blockingStatus -> return $ Unevaluated blockingStatus
-      Right newValue -> return $ Evaluated newValue
-
 -- | A method for evaluating builtins that takes in an argument allowing the
 -- recursive evaluation of applications. that takes in an argument allowing
 -- the subsequent further evaluation of applications.
 -- Such recursive evaluation is necessary when evaluating higher order
 -- functions such as fold, map etc.
-type EvalComplexBuiltin args expr builtin m =
-  (MonadNormBuiltin m) =>
-  NamedBoundCtx ->
-  EvalApp builtin m ->
-  Eval builtin m ->
-  args (ForcibleExpr builtin) ->
-  m (Maybe (ForcedExpr builtin))
+type BuiltinEvaluation args builtin m =
+  args (Value builtin) ->
+  m (BuiltinEvaluationResult Value ForcedValue builtin)
 
-forceEvalSimpleBuiltin ::
+forceEvalCast ::
   (IsArgs args, MonadLogger m, Pretty builtin, PrintableBuiltin builtin) =>
   Provenance ->
   builtin ->
-  SimpleStandardBuiltinEvaluation args builtin m ->
+  (args (Expr builtin) -> m (BuiltinEvaluationResult Expr Expr builtin)) ->
   [GenericArg (Expr builtin)] ->
   m (Expr builtin)
-forceEvalSimpleBuiltin p b simpleEval spine =
-  case simpleEvaluation simpleEval _ of
-    Evaluated args -> eval args
-    Unevaluated _ -> return $ normAppList (Builtin p b) spine
+forceEvalCast _p _b evalCast spine = do
+  case getExpr accessSpine spine of
+    Nothing -> developerError "Unexpectedly unable to evaluate cast"
+    Just args -> do
+      maybeResult <- evalCast args
+      case maybeResult of
+        Evaluated result -> return result
+        Unevaluated {} -> developerError "Unexpectedly unable to evaluate cast"
 
-evalSimpleOrReturn ::
-  (MonadNormBuiltin m, IsArgs args) =>
-  Accessor (expr builtin) (args (expr builtin)) ->
-  SimpleStandardBuiltinEvaluation args builtin m ->
-  args (expr builtin) ->
-  m (expr builtin)
-evalSimpleOrReturn accessBuiltin evalBuiltin args = do
-  maybeResult <- evalBuiltin args
-  case maybeResult of
-    Unevaluated {} -> return $ mkExpr accessBuiltin args
-    Evaluated result -> return result
-
-{-
-evalNonSimple ::
-  (MonadNormBuiltin m, IsArgs args) =>
-  EvalApp Value builtin m ->
+unforcedBuiltinApp ::
+  (IsArgs args) =>
   Accessor builtin () ->
-  EvalComplexBuiltin args Value builtin m ->
   args (Value builtin) ->
-  m (Value builtin)
-evalNonSimple evalApp accessBuiltin eval args = do
-  maybeResult <- eval evalApp args
-  return $ case maybeResult of
-    Just result -> result
-    Nothing -> VBuiltin (mkExpr accessBuiltin ()) (mkExpr accessSpine args)
--}
+  Value builtin
+unforcedBuiltinApp accessBuiltin args =
+  UnforcedApp (Forced $ VBuiltin (mkExpr accessBuiltin ()) []) (mkExpr accessSpine args)
+
 --------------------------------------------------------------------------------
 -- Blocking
 
-data BlockingStatus expr
-  = InsufficientArgs
-  | DoesNotReduce
-  | Blocked (BlockingArgsTraversal expr)
-  | AlwaysReduces
-
-type BlockingArgsTraversal expr = forall m. (Monad m) => (expr -> m expr) -> m [GenericArg expr]
-
-blocked :: (IsArgs args) => NonEmpty Int -> args expr -> BlockingStatus expr
+{-
+blocked :: (IsArgs args) => Arity -> args (ForcedValue builtin) -> BlockingStatus builtin
 blocked indices spine
-  | maximum indices < length spine = Blocked $ traverseArgsAtIndices (NonEmpty.toList indices) 0 spine
+  | arity <= length spine = Blocked _
   | otherwise = InsufficientArgs
 
 traverseArgsAtIndices ::
   (Monad m) =>
   [Int] ->
   Int ->
-  GenericArgs expr ->
-  (expr -> m expr) ->
-  m (GenericArgs expr)
-traverseArgsAtIndices _blockingArgs _currentIndex [] _f = return []
-traverseArgsAtIndices [] _currentIndex args _f = return args
-traverseArgsAtIndices (blockingIndex : blockingIndices) currentIndex (arg : args) f
+  Spine builtin ->
+  m [ForcedValue builtin]
+traverseArgsAtIndices _blockingArgs _currentIndex [] = return []
+traverseArgsAtIndices [] _currentIndex args = return args
+traverseArgsAtIndices (blockingIndex : blockingIndices) currentIndex (arg : args)
   | currentIndex == blockingIndex = do
-      arg' <- traverse f arg
-      args' <- traverseArgsAtIndices blockingIndices (currentIndex + 1) args f
-      return $ arg' : args'
+      as <- traverseArgsAtIndices blockingIndices (currentIndex + 1) args
+      return $ arg : as
   | otherwise = do
       args' <- traverseArgsAtIndices (blockingIndex : blockingIndices) (currentIndex + 1) args f
       return $ arg : args'
+-}
 
 --------------------------------------------------------------------------------
 -- Evaluation
 
 evalOp2Args ::
-  Accessor (expr builtin) a ->
-  Accessor (expr builtin) b ->
-  Accessor (expr builtin) c ->
+  (MonadNorm builtin m) =>
+  Accessor (ForcedValue builtin) a ->
+  Accessor (ForcedValue builtin) b ->
+  Accessor (ForcedValue builtin) c ->
   (a -> b -> c) ->
-  SimpleStandardBuiltinEvaluation Op2Args builtin m
-evalOp2Args accessArg1 accessArg2 accessRes f args@(Op2Args e1 e2) =
-  case (getExpr accessArg1 e1, getExpr accessArg2 e2) of
-    (Just a, Just b) -> return $ Evaluated $ mkExpr accessRes (f a b)
-    _ -> return $ Unevaluated $ blocked [0, 1] args
+  BuiltinEvaluation Op2Args builtin m
+evalOp2Args accessArg1 accessArg2 accessRes f (Op2Args e1 e2) = do
+  fe1 <- forceValue e1
+  fe2 <- forceValue e2
+  case (getExpr accessArg1 fe1, getExpr accessArg2 fe2) of
+    (Just a, Just b) -> return $ Evaluated $ Forced $ mkExpr accessRes (f a b)
+    _ -> return $ Unevaluated [fe1, fe2]
 
 evalTensorOp1 ::
-  forall expr builtin a m.
-  (MonadNormBuiltin m, HasTensorExpr expr builtin, Eq a) =>
-  Accessor (expr builtin) (TensorOp1Args (expr builtin)) ->
-  Accessor (expr builtin) (Tensor a) ->
+  forall builtin a m.
+  (MonadNorm builtin m, HasTensorExpr ForcedValue Value builtin, Eq a) =>
+  Accessor builtin () ->
+  Accessor (ForcedValue builtin) (Tensor a) ->
   (a -> a) ->
-  SimpleStandardBuiltinEvaluation TensorOp1Args builtin m
+  BuiltinEvaluation TensorOp1Args builtin m
 evalTensorOp1 accessBuiltinOp accessLit op = eval
   where
-    eval :: SimpleStandardBuiltinEvaluation TensorOp1Args builtin m
-    eval = \case
-      TensorOp1Args _ds (getExpr accessLit -> Just t) ->
-        return $ Evaluated $ mkExpr accessLit $ mapTensor op t
-      TensorOp1Args (IDimCons d _) (getExpr accessConstTensor -> Just xs) ->
-        Evaluated . mkExpr accessConstTensor <$> traverseConstTensorValue (evalFull d) xs
-      TensorOp1Args (IDimCons d _) (getExpr accessStackTensor -> Just xs) ->
-        Evaluated . mkExpr accessStackTensor <$> traverseStackTensorElements (evalFull d) xs
-      args -> return $ Unevaluated $ blocked [1] args
+    eval :: BuiltinEvaluation TensorOp1Args builtin m
+    eval (TensorOp1Args vds vxs) = do
+      fds <- forceValue vds
+      fxs <- forceValue vxs
+      case (fds, fxs) of
+        (_, getExpr accessLit -> Just t) ->
+          return $ Evaluated $ Forced $ mkExpr accessLit $ mapTensor op t
+        (ICons _ d _, getExpr accessConstTensor -> Just xs) -> do
+          let xs' = mapConstTensorValue (evalFull d) xs
+          return $ Evaluated $ Forced $ mkExpr accessConstTensor xs'
+        (ICons _ d _, getExpr accessStackTensor -> Just xs) -> do
+          let xs' = mapStackTensorElements (evalFull d) xs
+          return $ Evaluated $ Forced $ mkExpr accessStackTensor xs'
+        _ -> return $ Unevaluated [fxs]
 
-    evalFull :: expr builtin -> expr builtin -> m (expr builtin)
-    evalFull d x = evalSimpleOrReturn accessBuiltinOp eval (TensorOp1Args d x)
+    evalFull :: Value builtin -> Value builtin -> Value builtin
+    evalFull d x = unforcedBuiltinApp accessBuiltinOp (TensorOp1Args d x)
 
 evalTensorOp2 ::
-  forall expr builtin a m.
-  (MonadNormBuiltin m, HasTensorExpr expr builtin, Eq a) =>
-  Accessor (expr builtin) (TensorOp2Args (expr builtin)) ->
-  Accessor (expr builtin) (Tensor a) ->
+  forall builtin a m.
+  (MonadNorm builtin m, HasTensorExpr ForcedValue Value builtin, Eq a) =>
+  Accessor builtin () ->
+  Accessor (ForcedValue builtin) (Tensor a) ->
   (a -> a -> a) ->
   Maybe a ->
   Maybe a ->
   Maybe a ->
   Maybe a ->
-  SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
+  BuiltinEvaluation TensorOp2Args builtin m
 evalTensorOp2 accessOp2 accessLit = evalHeteroTensorOp2 accessOp2 accessLit accessLit
 
 evalHeteroTensorOp2 ::
-  forall expr builtin a b m.
-  (MonadNormBuiltin m, HasTensorExpr expr builtin, Eq a, Eq b) =>
-  Accessor (expr builtin) (TensorOp2Args (expr builtin)) ->
-  Accessor (expr builtin) (Tensor a) ->
-  Accessor (expr builtin) (Tensor b) ->
+  forall builtin a b m.
+  (MonadNorm builtin m, HasTensorExpr ForcedValue Value builtin, Eq a, Eq b) =>
+  Accessor builtin () ->
+  Accessor (ForcedValue builtin) (Tensor a) ->
+  Accessor (ForcedValue builtin) (Tensor b) ->
   (a -> a -> b) ->
   Maybe a ->
   Maybe a ->
   Maybe a ->
   Maybe a ->
-  SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
+  BuiltinEvaluation TensorOp2Args builtin m
 evalHeteroTensorOp2 accessOp2 inputLit outputLit op leftUnit rightUnit leftZero rightZero = eval
   where
-    eval :: SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
-    eval = \case
-      TensorOp2Args _ds (getExpr inputLit -> Just xs) (getExpr inputLit -> Just ys) ->
-        return $ Evaluated $ mkExpr outputLit $ zipWithTensor op xs ys
-      TensorOp2Args (IDimCons _ ds) (getExpr accessConstTensor -> Just xs) (getExpr accessConstTensor -> Just ys) -> do
-        newConstValue <- evalFull ds (constValue xs) (constValue ys)
-        return $ Evaluated $ mkExpr accessConstTensor $ xs {constValue = newConstValue}
-      -- Unlike const tensors, we need to eval stack tensors as after being combined with constants, short-circuiting of
-      -- operations may allow for further reduction.
-      TensorOp2Args (IDimCons _ ds) (getExpr inputLit -> Just xs) (getExpr accessStackTensor -> Just ys) -> do
-        newElements <- zipWithM (evalFull ds) (unstackExpr xs) (stackElements ys)
-        evalStackTensorWithPrimitives [Wrapper outputLit] $ ys {stackElements = newElements}
-      TensorOp2Args (IDimCons _ ds) (getExpr accessStackTensor -> Just xs) (getExpr inputLit -> Just ys) -> do
-        newElements <- zipWithM (evalFull ds) (stackElements xs) (unstackExpr ys)
-        evalStackTensorWithPrimitives [Wrapper outputLit] $ xs {stackElements = newElements}
-      TensorOp2Args (IDimCons _ ds) (getExpr accessStackTensor -> Just xs) (getExpr accessStackTensor -> Just ys) -> do
-        newElements <- zipWithM (evalFull ds) (stackElements xs) (stackElements ys)
-        evalStackTensorWithPrimitives [Wrapper outputLit] $ xs {stackElements = newElements}
-      TensorOp2Args _ds xs ys
-        | isJust leftUnit && leftUnit == getConstValue xs -> return $ Evaluated ys
-      TensorOp2Args _ds xs ys
-        | isJust rightUnit && rightUnit == getConstValue ys -> return $ Evaluated xs
-      TensorOp2Args _ds xs _ys
-        | isJust leftZero && leftZero == getConstValue xs -> return $ Evaluated xs
-      TensorOp2Args _ds _xs ys
-        | isJust rightZero && rightZero == getConstValue ys -> return $ Evaluated ys
-      args -> return $ Unevaluated $ blocked [1, 2] args
+    eval :: BuiltinEvaluation TensorOp2Args builtin m
+    eval (TensorOp2Args vds vxs vys) = do
+      fxs <- forceValue vxs
+      fys <- forceValue vys
+      fds <- forceValue vds
+      case (fds, fxs, fys) of
+        (_, getExpr inputLit -> Just xs, getExpr inputLit -> Just ys) ->
+          return $ Evaluated $ Forced $ mkExpr outputLit $ zipWithTensor op xs ys
+        (ICons _ _ ds, getExpr accessConstTensor -> Just xs, getExpr accessConstTensor -> Just ys) -> do
+          let newConstValue = evalFull ds (constValue xs) (constValue ys)
+          return $ Evaluated $ Forced $ mkExpr accessConstTensor $ xs {constValue = newConstValue}
+        -- Unlike const tensors, we need to eval stack tensors as after being combined with constants, short-circuiting of
+        -- operations may allow for further reduction.
+        (ICons _ _ ds, getExpr inputLit -> Just xs, getExpr accessStackTensor -> Just ys) -> do
+          let newElements = zipWith (evalFull ds) (unstackExpr xs) (stackElements ys)
+          evalStackTensorWithPrimitives [Wrapper outputLit] $ ys {stackElements = newElements}
+        (ICons _ _ ds, getExpr accessStackTensor -> Just xs, getExpr inputLit -> Just ys) -> do
+          let newElements = zipWith (evalFull ds) (stackElements xs) (unstackExpr ys)
+          evalStackTensorWithPrimitives [Wrapper outputLit] $ xs {stackElements = newElements}
+        (ICons _ _ ds, getExpr accessStackTensor -> Just xs, getExpr accessStackTensor -> Just ys) -> do
+          let newElements = zipWith (evalFull ds) (stackElements xs) (stackElements ys)
+          evalStackTensorWithPrimitives [Wrapper outputLit] $ xs {stackElements = newElements}
+        _ -> do
+          leftConstant <- getConstValue fxs
+          rightConstant <- getConstValue fys
+          if justEqual leftUnit leftConstant || justEqual rightZero rightConstant
+            then return $ Evaluated $ Forced fys
+            else
+              if justEqual rightUnit rightConstant || justEqual leftZero leftConstant
+                then return $ Evaluated $ Forced fxs
+                else return $ Unevaluated [fds, fxs, fys]
 
-    evalFull :: expr builtin -> expr builtin -> expr builtin -> m (expr builtin)
-    evalFull d x y = evalSimpleOrReturn accessOp2 eval (TensorOp2Args d x y)
+    evalFull :: Value builtin -> Value builtin -> Value builtin -> Value builtin
+    evalFull d x y =
+      unforcedBuiltinApp accessOp2 $
+        TensorOp2Args
+          { tensorOp2Dims = d,
+            tensorOp2Arg1 = x,
+            tensorOp2Arg2 = y
+          }
 
-    unstackExpr :: Tensor a -> [expr builtin]
-    unstackExpr xs = mkExpr inputLit <$> unstack xs
+    unstackExpr :: Tensor a -> [Value builtin]
+    unstackExpr xs = Forced . mkExpr inputLit <$> unstack xs
 
-    getConstValue :: expr builtin -> Maybe a
+    getConstValue :: ForcedValue builtin -> m (Maybe a)
     getConstValue value = case getExpr inputLit value of
-      Just (ConstantTensor _ v) -> Just v
+      Just (ConstantTensor _ v) -> return $ Just v
       _ -> case getExpr accessConstTensor value of
-        Just constTensor -> getConstValue (constValue constTensor)
-        _ -> Nothing
+        Nothing -> return Nothing
+        Just constTensor -> do
+          forcedValue <- forceValue (constValue constTensor)
+          getConstValue forcedValue
 
 evalReduceTensor ::
-  forall expr builtin a m.
-  (MonadNormBuiltin m, HasTensorExpr expr builtin, PrintableBuiltin builtin) =>
-  Accessor (expr builtin) (TensorReductionArgs (expr builtin)) ->
-  Accessor (expr builtin) (TensorOp2Args (expr builtin)) ->
-  Accessor (expr builtin) (Tensor a) ->
-  SimpleStandardBuiltinEvaluation TensorOp2Args builtin m ->
+  forall builtin a m.
+  (MonadNorm builtin m, HasTensorExpr ForcedValue Value builtin, PrintableBuiltin builtin) =>
+  Accessor builtin () ->
+  Accessor builtin () ->
+  Accessor (ForcedValue builtin) (Tensor a) ->
   (a -> a -> a) ->
-  SimpleStandardBuiltinEvaluation TensorReductionArgs builtin m
-evalReduceTensor accessReductionOp accessBop accessLit evalOp2 op2 = eval
+  BuiltinEvaluation TensorReductionArgs builtin m
+evalReduceTensor accessReductionOp accessBop accessLit op2 (TensorReductionArgs vd ve vxs) = do
+  fd <- forceValue vd
+  fe <- forceValue ve
+  fxs <- forceValue vxs
+  case (fd, fe, fxs) of
+    (_, getExpr accessLit -> Just e, getExpr accessLit -> Just xs) ->
+      return $ Evaluated $ Forced $ mkExpr accessLit $ foldTensor op2 e xs
+    (ICons _ _ ds, e, getExpr accessStackTensor -> Just xs) ->
+      return $ Evaluated $ foldl (foldFn (Forced e) ds) (Forced e) (stackElements xs)
+    (INil _, _, _) ->
+      return $ Evaluated $ Forced fxs
+    _ -> return $ Unevaluated [fxs]
   where
-    eval :: SimpleStandardBuiltinEvaluation TensorReductionArgs builtin m
-    eval = \case
-      TensorReductionArgs _ (getExpr accessLit -> Just e) (getExpr accessLit -> Just xs) ->
-        return $ Evaluated $ mkExpr accessLit $ foldTensor op2 e xs
-      TensorReductionArgs (IDimCons _ ds) e (getExpr accessStackTensor -> Just xs) ->
-        Evaluated <$> foldM (foldFn e ds) e (stackElements xs)
-      TensorReductionArgs IDimNil _e xs ->
-        return $ Evaluated xs
-      args -> return $ Unevaluated $ blocked [1] args
+    evalFull :: Value builtin -> Value builtin -> Value builtin -> Value builtin
+    evalFull ds e xs = unforcedBuiltinApp accessReductionOp (TensorReductionArgs ds e xs)
 
-    evalFull :: expr builtin -> expr builtin -> expr builtin -> m (expr builtin)
-    evalFull ds e xs = evalSimpleOrReturn accessReductionOp eval (TensorReductionArgs ds e xs)
+    evalBop :: Value builtin -> Value builtin -> Value builtin -> Value builtin
+    evalBop ds xs ys = unforcedBuiltinApp accessBop (TensorOp2Args ds xs ys)
 
-    evalBop :: expr builtin -> expr builtin -> expr builtin -> m (expr builtin)
-    evalBop ds xs ys = evalSimpleOrReturn accessBop evalOp2 (TensorOp2Args ds xs ys)
-
-    foldFn e ds r y = do
-      y' <- evalFull ds e y
-      evalBop ds r y'
+    foldFn :: Value builtin -> Value builtin -> Value builtin -> Value builtin -> Value builtin
+    foldFn e ds r y = evalBop ds r (evalFull ds e y)
 
 -----------------------------------------------------------------------------
 -- Individual builtin evaluation
 -----------------------------------------------------------------------------
 -- Not
 
-evalNot :: (MonadNormBuiltin m, HasBoolExpr expr builtin) => SimpleStandardBuiltinEvaluation TensorOp1Args builtin m
-evalNot = evalTensorOp1 accessNotTensor accessBoolTensorLiteral not
+evalNot :: (MonadNorm builtin m, HasBoolExpr ForcedValue Value builtin) => BuiltinEvaluation TensorOp1Args builtin m
+evalNot = evalTensorOp1 accessNotTensorBuiltin accessBoolTensorLiteral not
 
 -----------------------------------------------------------------------------
 -- And
 
-evalAnd :: (MonadNormBuiltin m, HasBoolExpr expr builtin) => SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
-evalAnd = evalTensorOp2 accessAndTensor accessBoolTensorLiteral (&&) (Just True) (Just True) (Just False) (Just False)
+evalAnd :: (MonadNorm builtin m, HasBoolExpr ForcedValue Value builtin) => BuiltinEvaluation TensorOp2Args builtin m
+evalAnd = evalTensorOp2 accessAndTensorBuiltin accessBoolTensorLiteral (&&) (Just True) (Just True) (Just False) (Just False)
 
 -----------------------------------------------------------------------------
 -- Or
 
-evalOr :: (MonadNormBuiltin m, HasBoolExpr expr builtin) => SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
-evalOr = evalTensorOp2 accessOrTensor accessBoolTensorLiteral (||) (Just False) (Just False) (Just True) (Just True)
+evalOr :: (MonadNorm builtin m, HasBoolExpr ForcedValue Value builtin) => BuiltinEvaluation TensorOp2Args builtin m
+evalOr = evalTensorOp2 accessOrTensorBuiltin accessBoolTensorLiteral (||) (Just False) (Just False) (Just True) (Just True)
 
 -----------------------------------------------------------------------------
 -- Implies
 
-evalImplies :: (MonadNormBuiltin m, HasBoolExpr expr builtin) => SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
+evalImplies :: (MonadNorm builtin m, HasBoolExpr ForcedValue Value builtin) => BuiltinEvaluation TensorOp2Args builtin m
 evalImplies (TensorOp2Args ds xs ys) = do
-  notXs <- evalSimpleOrReturn accessNotTensor evalNot (TensorOp1Args ds xs)
-  Evaluated <$> evalSimpleOrReturn accessOrTensor evalOr (TensorOp2Args ds notXs ys)
+  let notXs = unforcedBuiltinApp accessNotTensorBuiltin (TensorOp1Args ds xs)
+  let notXsOrYs = unforcedBuiltinApp accessOrTensorBuiltin (TensorOp2Args ds notXs ys)
+  return $ Evaluated notXsOrYs
 
 -----------------------------------------------------------------------------
 -- ReduceAnd
 
 evalReduceAndTensor ::
-  (MonadNormBuiltin m, HasBoolExpr expr builtin, PrintableBuiltin builtin) =>
-  SimpleStandardBuiltinEvaluation TensorReductionArgs builtin m
-evalReduceAndTensor = evalReduceTensor accessReduceAnd accessAndTensor accessBoolTensorLiteral evalAnd (&&)
+  (MonadNorm builtin m, HasBoolExpr ForcedValue Value builtin, PrintableBuiltin builtin) =>
+  BuiltinEvaluation TensorReductionArgs builtin m
+evalReduceAndTensor = evalReduceTensor accessReduceAndBuiltin accessAndTensorBuiltin accessBoolTensorLiteral (&&)
 
 -----------------------------------------------------------------------------
 -- ReduceOr
 
 evalReduceOrTensor ::
-  (MonadNormBuiltin m, HasBoolExpr expr builtin, PrintableBuiltin builtin) =>
-  SimpleStandardBuiltinEvaluation TensorReductionArgs builtin m
-evalReduceOrTensor = evalReduceTensor accessReduceOr accessOrTensor accessBoolTensorLiteral evalOr (||)
+  (MonadNorm builtin m, HasBoolExpr ForcedValue Value builtin, PrintableBuiltin builtin) =>
+  BuiltinEvaluation TensorReductionArgs builtin m
+evalReduceOrTensor = evalReduceTensor accessReduceOrBuiltin accessOrTensorBuiltin accessBoolTensorLiteral (||)
 
 -----------------------------------------------------------------------------
 -- If
 
-evalIf :: (MonadNormBuiltin m, HasBoolExpr expr builtin) => SimpleStandardBuiltinEvaluation IfArgs builtin m
-evalIf args@(IfArgs _t c e1 e2) = case c of
-  IBoolLiteral True -> return $ Evaluated e1
-  IBoolLiteral False -> return $ Evaluated e2
-  _ -> return $ Unevaluated $ blocked [1] args
+evalIf :: (MonadNorm builtin m, HasBoolExpr ForcedValue Value builtin) => BuiltinEvaluation IfArgs builtin m
+evalIf (IfArgs _t vc ve1 ve2) = do
+  fc <- forceValue vc
+  case fc of
+    IBoolLiteral True -> return $ Evaluated ve1
+    IBoolLiteral False -> return $ Evaluated ve2
+    _ -> return $ Unevaluated [fc]
 
 -----------------------------------------------------------------------------
 -- Index
 
 evalCompareIndex ::
-  (MonadNormBuiltin m, HasBoolExpr expr builtin, BuiltinHasIndexLiterals builtin) =>
+  (MonadNorm builtin m, HasBoolExpr ForcedValue Value builtin, BuiltinHasIndexLiterals builtin) =>
   ComparisonOp ->
-  SimpleStandardBuiltinEvaluation IndexComparisonArgs builtin m
-evalCompareIndex op = \case
-  IndexCompArgs _ _ (IIndexLiteral x _) (IIndexLiteral y _) -> return $ Evaluated $ IBoolLiteral (comparisonOp op x y)
-  args -> return $ Unevaluated $ blocked [2, 3] args
+  BuiltinEvaluation IndexComparisonArgs builtin m
+evalCompareIndex op (IndexCompArgs _ _ vx vy) = do
+  fx <- forceValue vx
+  fy <- forceValue vy
+  case (fx, fy) of
+    (IIndexLiteral x _, IIndexLiteral y _) -> return $ Evaluated $ Forced $ IBoolLiteral (comparisonOp op x y)
+    _ -> return $ Unevaluated [fx, fy]
 
 -----------------------------------------------------------------------------
 -- Nat
 
 evalAddNat ::
-  (MonadNormBuiltin m, HasNatExpr expr builtin) =>
-  SimpleStandardBuiltinEvaluation Op2Args builtin m
+  (MonadNorm builtin m, HasNatExpr ForcedValue Value builtin) =>
+  BuiltinEvaluation Op2Args builtin m
 evalAddNat = evalOp2Args accessNatLiteral accessNatLiteral accessNatLiteral (+)
 
 evalMulNat ::
-  (MonadNormBuiltin m, HasNatExpr expr builtin) =>
-  SimpleStandardBuiltinEvaluation Op2Args builtin m
+  (MonadNorm builtin m, HasNatExpr ForcedValue Value builtin) =>
+  BuiltinEvaluation Op2Args builtin m
 evalMulNat = evalOp2Args accessNatLiteral accessNatLiteral accessNatLiteral (*)
 
 evalCompareNat ::
-  (MonadNormBuiltin m, HasBoolExpr expr builtin, BuiltinHasNatLiterals builtin) =>
+  (MonadNorm builtin m, HasBoolExpr ForcedValue Value builtin, BuiltinHasNatLiterals builtin) =>
   ComparisonOp ->
-  SimpleStandardBuiltinEvaluation Op2Args builtin m
+  BuiltinEvaluation Op2Args builtin m
 evalCompareNat op = evalOp2Args accessNatLiteral accessNatLiteral accessBoolTensorLiteral (\x y -> ZeroDimTensor $ comparisonOp op x y)
 
 -----------------------------------------------------------------------------
 -- List
 
 evalMapList ::
-  forall expr builtin m.
-  (MonadLogger m, HasListExpr expr builtin) =>
-  NamedBoundCtx ->
-  EvalApp builtin m ->
-  Eval builtin m ->
-  MapListArgs (expr builtin) ->
-  m (expr builtin)
-evalMapList ctx evalApp eval (MapListArgs a b f xs) = evalList xs
-  where
-    evalList :: expr builtin -> m (expr builtin)
-    evalList = \case
-      INil _ -> return $ INil b
-      ICons _ v vs -> do
-        v' <- evalApp ctx f [explicit v]
-        vs' <- evalMapList ctx evalApp eval (recArgs vs)
-        return $ ICons b v' vs'
-      vs -> return $ mkExpr accessMapList (recArgs vs)
-
-    recArgs :: expr builtin -> MapListArgs (expr builtin)
-    recArgs = MapListArgs a b f
+  forall builtin m.
+  (MonadNorm builtin m, HasListExpr ForcedValue Value builtin) =>
+  BuiltinEvaluation MapListArgs builtin m
+evalMapList (MapListArgs a b f vxs) = do
+  fxs <- forceValue vxs
+  case fxs of
+    INil _ -> return $ Evaluated $ Forced $ INil b
+    ICons _ v vs -> do
+      let v' = UnforcedApp f [explicit v]
+      let vs' = unforcedBuiltinApp accessMapListBuiltin (MapListArgs a b f vs)
+      return $ Evaluated $ Forced $ ICons b v' vs'
+    _ -> return $ Unevaluated [fxs]
 
 evalFoldList ::
-  forall m expr builtin.
-  (MonadLogger m, HasListExpr expr builtin) =>
-  NamedBoundCtx ->
-  EvalApp builtin m ->
-  Eval builtin m ->
-  FoldListArgs (expr builtin) ->
-  m (expr builtin)
-evalFoldList ctx evalApp eval (FoldListArgs a b f e xs) = evalList xs
-  where
-    evalList :: expr builtin -> m (expr builtin)
-    evalList = \case
-      INil _ -> return e
-      ICons _ v vs -> do
-        r <- evalFoldList ctx evalApp eval (recArgs vs)
-        evalApp ctx f [explicit v, explicit r]
-      vs -> return $ mkExpr accessFoldList (recArgs vs)
-
-    recArgs :: expr builtin -> FoldListArgs (expr builtin)
-    recArgs = FoldListArgs a b f e
+  forall m builtin.
+  (MonadNorm builtin m, HasListExpr ForcedValue Value builtin) =>
+  BuiltinEvaluation FoldListArgs builtin m
+evalFoldList (FoldListArgs a b f e vxs) = do
+  fxs <- forceValue vxs
+  case fxs of
+    INil _ -> return $ Evaluated e
+    ICons _ v vs -> do
+      let r = unforcedBuiltinApp accessFoldListBuiltin (FoldListArgs a b f e vs)
+      return $ Evaluated $ UnforcedApp f [explicit v, explicit r]
+    _ -> return $ Unevaluated [fxs]
 
 -----------------------------------------------------------------------------
 -- Rational tensors
 
-evalNegRatTensor :: (MonadNormBuiltin m, HasRatExpr expr builtin) => SimpleStandardBuiltinEvaluation TensorOp1Args builtin m
-evalNegRatTensor = evalTensorOp1 accessNegRatTensor accessRatTensorLiteral (\x -> -x)
+evalNegRatTensor :: (MonadNorm builtin m, HasRatExpr ForcedValue Value builtin) => BuiltinEvaluation TensorOp1Args builtin m
+evalNegRatTensor = evalTensorOp1 accessNegRatTensorBuiltin accessRatTensorLiteral (\x -> -x)
 
-evalAddRatTensor :: (MonadNormBuiltin m, HasRatExpr expr builtin) => SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
-evalAddRatTensor = evalTensorOp2 accessAddRatTensor accessRatTensorLiteral (+) (Just 0) (Just 0) Nothing Nothing
+evalAddRatTensor :: (MonadNorm builtin m, HasRatExpr ForcedValue Value builtin) => BuiltinEvaluation TensorOp2Args builtin m
+evalAddRatTensor = evalTensorOp2 accessAddRatTensorBuiltin accessRatTensorLiteral (+) (Just 0) (Just 0) Nothing Nothing
 
-evalMulRatTensor :: (MonadNormBuiltin m, HasRatExpr expr builtin) => SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
-evalMulRatTensor = evalTensorOp2 accessMulRatTensor accessRatTensorLiteral (*) (Just 1) (Just 1) (Just 0) (Just 0)
+evalMulRatTensor :: (MonadNorm builtin m, HasRatExpr ForcedValue Value builtin) => BuiltinEvaluation TensorOp2Args builtin m
+evalMulRatTensor = evalTensorOp2 accessMulRatTensorBuiltin accessRatTensorLiteral (*) (Just 1) (Just 1) (Just 0) (Just 0)
 
-evalSubRatTensor :: (MonadNormBuiltin m, HasRatExpr expr builtin) => SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
-evalSubRatTensor = evalTensorOp2 accessSubRatTensor accessRatTensorLiteral (-) Nothing (Just 0) Nothing Nothing
+evalSubRatTensor :: (MonadNorm builtin m, HasRatExpr ForcedValue Value builtin) => BuiltinEvaluation TensorOp2Args builtin m
+evalSubRatTensor = evalTensorOp2 accessSubRatTensorBuiltin accessRatTensorLiteral (-) Nothing (Just 0) Nothing Nothing
 
-evalDivRatTensor :: (MonadNormBuiltin m, HasRatExpr expr builtin) => SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
-evalDivRatTensor args = evalTensorOp2 accessDivRatTensor accessRatTensorLiteral (/) Nothing (Just 1) Nothing Nothing args
+evalDivRatTensor :: (MonadNorm builtin m, HasRatExpr ForcedValue Value builtin) => BuiltinEvaluation TensorOp2Args builtin m
+evalDivRatTensor = evalTensorOp2 accessDivRatTensorBuiltin accessRatTensorLiteral (/) Nothing (Just 1) Nothing Nothing
 
-evalMinRatTensor :: (MonadNormBuiltin m, HasRatExpr expr builtin) => SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
-evalMinRatTensor = evalTensorOp2 accessMinRatTensor accessRatTensorLiteral min Nothing Nothing Nothing Nothing
+evalMinRatTensor :: (MonadNorm builtin m, HasRatExpr ForcedValue Value builtin) => BuiltinEvaluation TensorOp2Args builtin m
+evalMinRatTensor = evalTensorOp2 accessMinRatTensorBuiltin accessRatTensorLiteral min Nothing Nothing Nothing Nothing
 
-evalMaxRatTensor :: (MonadNormBuiltin m, HasRatExpr expr builtin) => SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
-evalMaxRatTensor = evalTensorOp2 accessMaxRatTensor accessRatTensorLiteral max Nothing Nothing Nothing Nothing
+evalMaxRatTensor :: (MonadNorm builtin m, HasRatExpr ForcedValue Value builtin) => BuiltinEvaluation TensorOp2Args builtin m
+evalMaxRatTensor = evalTensorOp2 accessMaxRatTensorBuiltin accessRatTensorLiteral max Nothing Nothing Nothing Nothing
 
 evalPowRat ::
-  (MonadNormBuiltin m, HasRatExpr expr builtin, BuiltinHasNatLiterals builtin) =>
-  SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
-evalPowRat = \case
-  TensorOp2Args _ (IRatTensor xs) (INatLiteral n) -> return $ Evaluated $ IRatTensor (mapTensor (^^ n) xs)
-  args -> return $ Unevaluated $ blocked [0, 1] args
+  (MonadNorm builtin m, HasRatExpr ForcedValue Value builtin, BuiltinHasNatLiterals builtin) =>
+  BuiltinEvaluation TensorOp2Args builtin m
+evalPowRat (TensorOp2Args _ vxs vn) = do
+  fxs <- forceValue vxs
+  fn <- forceValue vn
+  case (fxs, fn) of
+    (IRatTensor xs, INatLiteral n) -> return $ Evaluated $ Forced $ IRatTensor (mapTensor (^^ n) xs)
+    _ -> return $ Unevaluated [fxs, fn]
 
-evalReduceAddRatTensor :: (MonadNormBuiltin m, HasRatExpr expr builtin, PrintableBuiltin builtin) => SimpleStandardBuiltinEvaluation TensorReductionArgs builtin m
-evalReduceAddRatTensor = evalReduceTensor accessReduceAddRat accessAddRatTensor accessRatTensorLiteral evalAddRatTensor (+)
+evalReduceAddRatTensor :: (MonadNorm builtin m, HasRatExpr ForcedValue Value builtin, PrintableBuiltin builtin) => BuiltinEvaluation TensorReductionArgs builtin m
+evalReduceAddRatTensor = evalReduceTensor accessReduceAddRatBuiltin accessAddRatTensorBuiltin accessRatTensorLiteral (+)
 
-evalReduceMulRatTensor :: (MonadNormBuiltin m, HasRatExpr expr builtin, PrintableBuiltin builtin) => SimpleStandardBuiltinEvaluation TensorReductionArgs builtin m
-evalReduceMulRatTensor = evalReduceTensor accessReduceMulRat accessMulRatTensor accessRatTensorLiteral evalMulRatTensor (*)
+evalReduceMulRatTensor :: (MonadNorm builtin m, HasRatExpr ForcedValue Value builtin, PrintableBuiltin builtin) => BuiltinEvaluation TensorReductionArgs builtin m
+evalReduceMulRatTensor = evalReduceTensor accessReduceMulRatBuiltin accessMulRatTensorBuiltin accessRatTensorLiteral (*)
 
-evalReduceMinRatTensor :: (MonadNormBuiltin m, HasRatExpr expr builtin, PrintableBuiltin builtin) => SimpleStandardBuiltinEvaluation TensorReductionArgs builtin m
-evalReduceMinRatTensor = evalReduceTensor accessReduceMinRat accessMinRatTensor accessRatTensorLiteral evalMinRatTensor min
+evalReduceMinRatTensor :: (MonadNorm builtin m, HasRatExpr ForcedValue Value builtin, PrintableBuiltin builtin) => BuiltinEvaluation TensorReductionArgs builtin m
+evalReduceMinRatTensor = evalReduceTensor accessReduceMinRatBuiltin accessMinRatTensorBuiltin accessRatTensorLiteral min
 
-evalReduceMaxRatTensor :: (MonadNormBuiltin m, HasRatExpr expr builtin, PrintableBuiltin builtin) => SimpleStandardBuiltinEvaluation TensorReductionArgs builtin m
-evalReduceMaxRatTensor = evalReduceTensor accessReduceMaxRat accessMaxRatTensor accessRatTensorLiteral evalMaxRatTensor max
+evalReduceMaxRatTensor :: (MonadNorm builtin m, HasRatExpr ForcedValue Value builtin, PrintableBuiltin builtin) => BuiltinEvaluation TensorReductionArgs builtin m
+evalReduceMaxRatTensor = evalReduceTensor accessReduceMaxRatBuiltin accessMaxRatTensorBuiltin accessRatTensorLiteral max
 
 evalCompareRatTensorPointwise ::
-  (MonadNormBuiltin m, HasBoolExpr expr builtin, HasRatExpr expr builtin, PrintableBuiltin builtin) =>
+  (MonadNorm builtin m, HasBoolExpr ForcedValue Value builtin, HasRatExpr ForcedValue Value builtin, PrintableBuiltin builtin) =>
   ComparisonOp ->
-  SimpleStandardBuiltinEvaluation TensorOp2Args builtin m
+  BuiltinEvaluation TensorOp2Args builtin m
 evalCompareRatTensorPointwise op =
   evalHeteroTensorOp2
-    (mkExpr accessCompareRatTensorPointwiseBuiltin op)
+    (applyAccessor accessCompareRatTensorPointwiseBuiltin op)
     accessRatTensorLiteral
     accessBoolTensorLiteral
     (comparisonOp op)
@@ -493,32 +428,35 @@ evalCompareRatTensorPointwise op =
 -- Generic vector operations
 
 evalAtVector ::
-  forall expr builtin m.
-  (MonadNormBuiltin m, BuiltinHasIndexLiterals builtin, HasVectorExpr expr builtin) =>
-  SimpleStandardBuiltinEvaluation AtVectorArgs builtin m
-evalAtVector args@(AtVectorArgs _t _d vector index) = case (vector, index) of
-  (IVecLiteral _t _d xs, IIndexLiteral i _) -> return $ Evaluated $ xs !! i
-  _ -> return $ Unevaluated $ blocked [2, 3] args
+  forall builtin m.
+  (MonadNorm builtin m, BuiltinHasIndexLiterals builtin, HasVectorExpr ForcedValue Value builtin) =>
+  BuiltinEvaluation AtVectorArgs builtin m
+evalAtVector (AtVectorArgs _t _d vector index) = do
+  forcedVector <- forceValue vector
+  forcedIndex <- forceValue index
+  case (forcedVector, forcedIndex) of
+    (IVecLiteral _t _d xs, IIndexLiteral i _) -> return $ Evaluated $ xs !! i
+    _ -> return $ Unevaluated [forcedVector, forcedIndex]
 
 -----------------------------------------------------------------------------
 -- Generic tensor operations
 -----------------------------------------------------------------------------
 
-type TensorOpEvalData args expr builtin m =
-  ( Accessor (expr builtin) (args (expr builtin)),
-    SimpleStandardBuiltinEvaluation args builtin m,
+type TensorOpEvalData args builtin =
+  ( Accessor (ForcedValue builtin) (args (Value builtin)),
+    Accessor builtin (),
     VType builtin
   )
 
-class HasLiftableTensorOperations expr builtin where
-  liftableTensorOp1s :: (MonadNormBuiltin m) => [TensorOpEvalData TensorOp1Args expr builtin m]
-  liftableTensorOp2s :: (MonadNormBuiltin m) => [TensorOpEvalData TensorOp2Args expr builtin m]
+class HasLiftableTensorOperations builtin where
+  liftableTensorOp1s :: [TensorOpEvalData TensorOp1Args builtin]
+  liftableTensorOp2s :: [TensorOpEvalData TensorOp2Args builtin]
 
-data TensorLiteralAccessor expr builtin
-  = forall a. (Eq a) => Wrapper (Accessor (expr builtin) (Tensor a))
+data TensorLiteralAccessor builtin
+  = forall a. (Eq a) => Wrapper (Accessor (ForcedValue builtin) (Tensor a))
 
-class HasTensorLiterals expr builtin where
-  tensorLiterals :: [TensorLiteralAccessor expr builtin]
+class HasTensorLiterals builtin where
+  tensorLiterals :: [TensorLiteralAccessor builtin]
 
 -----------------------------------------------------------------------------
 -- At
@@ -527,189 +465,270 @@ class HasTensorLiterals expr builtin where
 -- amount of work needed by deferring evaluation of operations until after indexing.
 -- For example `(xs + ys) ! i` becomes `xs ! i + ys ! i`.
 evalAtTensor ::
-  forall expr builtin m.
-  (MonadNormBuiltin m, HasTensorLiterals expr builtin, HasLiftableTensorOperations expr builtin, BuiltinHasListLiterals builtin, BuiltinHasIndexLiterals builtin, HasTensorExpr expr builtin, BuiltinHasForeach builtin) =>
-  NamedBoundCtx ->
-  EvalApp builtin m ->
-  Eval builtin m ->
-  SimpleStandardBuiltinEvaluation AtTensorArgs builtin m
-evalAtTensor ctx evalApp eval args@(AtTensorArgs t d ds tensor index) = do
-  maybeOptimisedResult <- goOp1 liftableTensorOp1s <|> goOp2 liftableTensorOp2s <|> goForeach
+  forall builtin m.
+  (MonadNorm builtin m, HasTensorLiterals builtin, HasLiftableTensorOperations builtin, BuiltinHasListLiterals builtin, BuiltinHasIndexLiterals builtin, HasTensorExpr ForcedValue Value builtin, BuiltinHasForeach builtin) =>
+  BuiltinEvaluation AtTensorArgs builtin m
+evalAtTensor args@(AtTensorArgs t d ds tensor index) = do
+  ftensor <- forceValue tensor
+  let maybeOptimisedResult =
+        goOp1 ftensor liftableTensorOp1s
+          <|> goOp2 ftensor liftableTensorOp2s
+          <|> goForeach ftensor
+
   case maybeOptimisedResult of
-    Just result -> return $ Evaluated result
+    Just result -> Evaluated <$> result
     Nothing -> unoptimisedEvalAtTensor args
   where
-    recEvalAt :: expr builtin -> m (expr builtin)
-    recEvalAt ys = evalSimpleOrReturn accessAtTensor (evalAtTensor ctx evalApp eval) (AtTensorArgs t d ds ys index)
+    recEvalAt :: Value builtin -> Value builtin
+    recEvalAt ys =
+      unforcedBuiltinApp accessAtTensorBuiltin $
+        AtTensorArgs
+          { atType = t,
+            atFirstDim = d,
+            atRemainingDims = ds,
+            atTensor = ys,
+            atIndex = index
+          }
 
-    goOp1 :: [TensorOpEvalData TensorOp1Args expr builtin m] -> m (Maybe (expr builtin))
-    goOp1 = \case
-      (accessOp1, evalOp1, _) : remainingOp1s -> case getExpr accessOp1 tensor of
-        Just (TensorOp1Args _ xs) -> do
-          xsi <- recEvalAt xs
-          Just <$> evalSimpleOrReturn accessOp1 evalOp1 (TensorOp1Args ds xsi)
-        _ -> goOp1 remainingOp1s
-      [] -> return Nothing
+    goOp1 :: ForcedValue builtin -> [TensorOpEvalData TensorOp1Args builtin] -> Maybe (m (Value builtin))
+    goOp1 ftensor = \case
+      (accessOp1Args, accessOp1, _) : remainingOp1s -> case getExpr accessOp1Args ftensor of
+        Just (TensorOp1Args _ xs) -> Just $ do
+          let xsi = recEvalAt xs
+          return $ unforcedBuiltinApp accessOp1 (TensorOp1Args ds xsi)
+        _ -> goOp1 ftensor remainingOp1s
+      [] -> Nothing
 
-    goOp2 :: [TensorOpEvalData TensorOp2Args expr builtin m] -> m (Maybe (expr builtin))
-    goOp2 = \case
-      (accessOp2, evalOp2, _) : remainingOps2 -> case getExpr accessOp2 tensor of
-        Just (TensorOp2Args _ xs ys) -> do
-          xsi <- recEvalAt xs
-          ysi <- recEvalAt ys
-          Just <$> evalSimpleOrReturn accessOp2 evalOp2 (TensorOp2Args ds xsi ysi)
-        _ -> goOp2 remainingOps2
-      _ -> return Nothing
+    goOp2 :: ForcedValue builtin -> [TensorOpEvalData TensorOp2Args builtin] -> Maybe (m (Value builtin))
+    goOp2 ftensor = \case
+      (accessOp2Args, accessOp2, _) : remainingOps2 -> case getExpr accessOp2Args ftensor of
+        Just (TensorOp2Args _ xs ys) -> Just $ do
+          let xsi = recEvalAt xs
+          let ysi = recEvalAt ys
+          return $ unforcedBuiltinApp accessOp2 (TensorOp2Args ds xsi ysi)
+        _ -> goOp2 ftensor remainingOps2
+      _ -> Nothing
 
-    goForeach :: m (Maybe (expr builtin))
-    goForeach = case getExpr accessForeachTensor tensor of
-      Just (ForeachTensorArgs _ _ _ fn) -> do
-        Just <$> evalApp ctx fn [explicit index]
-      _ -> return Nothing
+    goForeach :: ForcedValue builtin -> Maybe (m (Value builtin))
+    goForeach ftensor = case getExpr accessForeachTensor ftensor of
+      Just (ForeachTensorArgs _ _ _ fn) -> Just $ return $ UnforcedApp fn [explicit index]
+      _ -> Nothing
 
 unoptimisedEvalAtTensor ::
-  forall expr builtin m.
-  (MonadNormBuiltin m, HasTensorLiterals expr builtin, BuiltinHasListLiterals builtin, BuiltinHasIndexLiterals builtin, HasTensorExpr expr builtin) =>
-  SimpleStandardBuiltinEvaluation AtTensorArgs builtin m
-unoptimisedEvalAtTensor args@(AtTensorArgs _t _d ds tensor index) = do
-  case (index, tensor) of
+  forall builtin m.
+  (MonadNorm builtin m, HasTensorLiterals builtin, BuiltinHasListLiterals builtin, BuiltinHasIndexLiterals builtin, HasTensorExpr ForcedValue Value builtin) =>
+  BuiltinEvaluation AtTensorArgs builtin m
+unoptimisedEvalAtTensor (AtTensorArgs _t _d ds tensor index) = do
+  ftensor <- forceValue tensor
+  findex <- forceValue index
+  case (findex, ftensor) of
     (IIndexLiteral i _, getExpr accessStackTensor -> Just stackArgs) ->
       return $ Evaluated $ stackElements stackArgs !! i
     (IIndexLiteral _i _, getExpr accessConstTensor -> Just constArgs) ->
-      return $ Evaluated $ mkExpr accessConstTensor $ constArgs {constDims = ds}
-    _ -> goLiterals tensorLiterals
+      return $ Evaluated $ Forced $ mkExpr accessConstTensor $ constArgs {constDims = ds}
+    _ -> goLiterals ftensor findex tensorLiterals
   where
-    goLiterals :: [TensorLiteralAccessor expr builtin] -> m (BuiltinEvaluationResult builtin)
-    goLiterals literals = case literals of
-      Wrapper Access {..} : remainingLiterals -> case (index, getExpr tensor) of
-        (IIndexLiteral i, Just xs) -> return $ Evaluated $ mkExpr (xs `at` i)
-        _ -> goLiterals remainingLiterals
-      _ -> return $ Unevaluated $ blocked [3, 4] args
+    goLiterals ::
+      ForcedValue builtin ->
+      ForcedValue builtin ->
+      [TensorLiteralAccessor builtin] ->
+      m (BuiltinEvaluationResult Value ForcedValue builtin)
+    goLiterals ftensor findex literals = case literals of
+      Wrapper Access {..} : remainingLiterals -> case (findex, getExpr ftensor) of
+        (IIndexLiteral i, Just xs) -> return $ Evaluated $ Forced $ mkExpr (xs `at` i)
+        _ -> goLiterals ftensor findex remainingLiterals
+      _ -> return $ Unevaluated [ftensor, findex]
 
 -----------------------------------------------------------------------------
 -- Foreach
 
-type HasOptimisedAtBuiltins expr builtin =
-  ( HasTensorLiterals expr builtin,
-    HasLiftableTensorOperations expr builtin,
-    NormalisableBuiltin builtin,
-    BuiltinHasListLiterals builtin,
-    BuiltinHasNatType builtin,
-    BuiltinHasNatLiterals builtin,
-    BuiltinHasIndexLiterals builtin,
-    BuiltinHasTensors builtin,
-    BuiltinHasForeach builtin
-  )
-
-unoptimisedEvalForeachTensor ::
-  (MonadLogger m, HasTensorLiterals expr builtin, HasTensorExpr expr builtin, BuiltinHasNatLiterals builtin, BuiltinHasIndexLiterals builtin, BuiltinHasForeach builtin) =>
-  NamedBoundCtx ->
-  EvalApp builtin m ->
-  ForeachTensorArgs (expr builtin) ->
-  m (BuiltinEvaluationResult builtin)
-unoptimisedEvalForeachTensor ctx evalApp args@(ForeachTensorArgs t d ds f) = case d of
-  INatLiteral n -> do
-    xs <- traverse (\i -> evalApp ctx f [explicit (IIndexLiteral i d)]) [0 .. (n - 1 :: Int)]
-    Evaluated <$> evalSimpleOrReturn (mkExpr accessStackTensorBuiltin ()) evalStackTensor (StackTensorArgs t d ds xs)
-  _ -> return $ Unevaluated $ blocked [1] args
+evalForeachTensor ::
+  (MonadNorm builtin m, HasTensorLiterals builtin, HasTensorExpr ForcedValue Value builtin, BuiltinHasNatLiterals builtin, BuiltinHasIndexLiterals builtin, BuiltinHasForeach builtin) =>
+  BuiltinEvaluation ForeachTensorArgs builtin m
+evalForeachTensor (ForeachTensorArgs t d ds f) = do
+  fd <- forceValue d
+  case fd of
+    INatLiteral n -> do
+      let xs = fmap (\i -> UnforcedApp f [explicit (Forced $ IIndexLiteral i d)]) [0 .. (n - 1 :: Int)]
+      let stackArgs = StackTensorArgs t d ds xs
+      return $ Evaluated $ unforcedBuiltinApp accessStackTensorBuiltin stackArgs
+    _ -> return $ Unevaluated [fd]
 
 -----------------------------------------------------------------------------
 -- Stack
 
 evalStackTensor ::
-  (MonadNormBuiltin m, HasTensorLiterals expr builtin, BuiltinHasNatLiterals builtin, HasTensorExpr expr builtin) =>
-  SimpleStandardBuiltinEvaluation StackTensorArgs builtin m
+  (MonadNorm builtin m, HasTensorLiterals builtin, BuiltinHasNatLiterals builtin, HasTensorExpr ForcedValue Value builtin) =>
+  BuiltinEvaluation StackTensorArgs builtin m
 evalStackTensor = evalStackTensorWithPrimitives tensorLiterals
 
 evalStackTensorWithPrimitives ::
-  forall m builtin expr.
-  (MonadNormBuiltin m, BuiltinHasNatLiterals builtin, HasTensorExpr expr builtin) =>
-  [TensorLiteralAccessor expr builtin] ->
-  SimpleStandardBuiltinEvaluation StackTensorArgs builtin m
-evalStackTensorWithPrimitives tensorLits args@(StackTensorArgs _t d ds xs) = do
-  case (d, getDims ds) of
-    (INatLiteral n, Just ns) | length xs == n -> go ns xs tensorLits
-    _ -> return $ Unevaluated $ blocked [1, 2] args
+  forall m builtin.
+  (MonadNorm builtin m, BuiltinHasNatLiterals builtin, HasTensorExpr ForcedValue Value builtin) =>
+  [TensorLiteralAccessor builtin] ->
+  BuiltinEvaluation StackTensorArgs builtin m
+evalStackTensorWithPrimitives tensorLits (StackTensorArgs _t d ds xs) = do
+  fd <- forceValue d
+  fds <- forceValue ds
+  maybeDims <- forceDims (Forced fds)
+  case (fd, maybeDims) of
+    (INatLiteral n, Just ns) | length xs == n -> do
+      fxs <- traverse forceValue xs
+      go ns fxs tensorLits
+    _ -> return $ Unevaluated [fd, fds]
   where
-    go :: TensorShape -> [expr builtin] -> [TensorLiteralAccessor expr builtin] -> m (BuiltinEvaluationResult builtin)
+    go ::
+      TensorShape ->
+      [ForcedValue builtin] ->
+      [TensorLiteralAccessor builtin] ->
+      m (BuiltinEvaluationResult Value ForcedValue builtin)
     go elemDims elements = \case
       Wrapper Access {..} : prims ->
         case traverse getExpr elements of
-          Just xss -> return $ Evaluated $ mkExpr $ stack elemDims xss
+          Just xss -> return $ Evaluated $ Forced $ mkExpr $ stack elemDims xss
           Nothing -> go elemDims elements prims
-      [] -> return $ Unevaluated $ blocked [3, 3 + length elements] args
+      [] -> return $ Unevaluated elements
 
 -----------------------------------------------------------------------------
 -- Const
 
 evalConstTensor ::
-  forall expr builtin m.
-  (MonadNormBuiltin m, HasTensorLiterals expr builtin, BuiltinHasNatLiterals builtin, HasTensorExpr expr builtin) =>
-  SimpleStandardBuiltinEvaluation ConstTensorArgs builtin m
-evalConstTensor args@(ConstTensorArgs _t xs ds) =
+  forall builtin m.
+  (MonadNorm builtin m, HasTensorLiterals builtin, BuiltinHasNatLiterals builtin, HasTensorExpr ForcedValue Value builtin) =>
+  BuiltinEvaluation ConstTensorArgs builtin m
+evalConstTensor (ConstTensorArgs _t xs ds) = do
+  fxs <- forceValue xs
+  fds <- forceValue ds
+  maybeDims <- forceDims (Forced fds)
   -- Pattern matching on ds here is technically a bug as blocking will not
   -- function correctly. However, to fix it we would need to go via `StackTensor`
-  -- and in particular make `StackTensor` take the size argument as an expression.
+  -- and in particular make `StackTensor` take the size argument as an Value.
   -- Our type-system can't handle that easily yet.
-  case (`go` tensorLiterals) =<< getDims ds of
-    Just result -> return $ Evaluated result
-    _ -> return $ Unevaluated $ blocked [1, 2] args
+  case maybeDims of
+    Just dims -> go dims fxs tensorLiterals
+    _ -> return $ Unevaluated [fds]
   where
-    go :: [Int] -> [TensorLiteralAccessor expr builtin] -> Maybe (expr builtin)
-    go dims = \case
-      [] -> Nothing
-      Wrapper Access {..} : prims -> case getExpr xs of
+    go ::
+      TensorShape ->
+      ForcedValue builtin ->
+      [TensorLiteralAccessor builtin] ->
+      m (BuiltinEvaluationResult Value ForcedValue builtin)
+    go dims value = \case
+      [] -> return $ Unevaluated [value]
+      Wrapper Access {..} : prims -> case getExpr value of
         Just t -> case t of
-          ZeroDimTensor v -> Just $ mkExpr $ ConstantTensor dims v
+          ZeroDimTensor v -> return $ Evaluated $ Forced $ mkExpr $ ConstantTensor dims v
           _ -> developerError "Non-zero dimensional tensor argument for ConstTensor"
-        Nothing -> go dims prims
+        Nothing -> go dims value prims
 
 evalForeachVector ::
-  (MonadLogger m, HasTensorLiterals expr builtin, HasVectorExpr expr builtin, BuiltinHasNatLiterals builtin, BuiltinHasIndexLiterals builtin, BuiltinHasForeach builtin) =>
-  NamedBoundCtx ->
-  EvalApp builtin m ->
-  Eval builtin m ->
-  ForeachVectorArgs (expr builtin) ->
-  m (expr builtin)
-evalForeachVector ctx evalApp _eval args@(ForeachVectorArgs t d f) = case d of
-  INatLiteral n -> do
-    xs <- traverse (\i -> evalApp ctx f [explicit (IIndexLiteral i d)]) [0 .. (n - 1 :: Int)]
-    return $ IVecLiteral t d xs
-  _ -> return $ mkExpr accessForeachVector args
+  (MonadNorm builtin m, HasTensorLiterals builtin, HasVectorExpr ForcedValue Value builtin, BuiltinHasNatLiterals builtin, BuiltinHasIndexLiterals builtin, BuiltinHasForeach builtin) =>
+  BuiltinEvaluation ForeachVectorArgs builtin m
+evalForeachVector (ForeachVectorArgs t d f) = do
+  fd <- forceValue d
+  case fd of
+    INatLiteral n -> do
+      let xs = fmap (\i -> UnforcedApp f [explicit (Forced $ IIndexLiteral i d)]) [0 .. (n - 1 :: Int)]
+      return $ Evaluated $ Forced $ IVecLiteral t d xs
+    _ -> return $ Unevaluated [fd]
 
 evalIterate ::
-  (MonadLogger m, HasNatExpr expr builtin, BuiltinHasIterate builtin) =>
-  NamedBoundCtx ->
-  EvalApp builtin m ->
-  Eval builtin m ->
-  IterateArgs (expr builtin) ->
-  m (expr builtin)
-evalIterate ctx evalApp _eval args@(IterateArgs t f n e) = case n of
-  INatLiteral 0 -> return e
-  INatLiteral v -> do
-    let recFn = mkBuiltin accessIterateBuiltin () [t, explicit f, explicit (INatLiteral (v - 1))]
-    evalApp ctx f [explicit recFn, explicit e]
-  _ -> return $ mkExpr accessIterate args
+  (MonadNorm builtin m, HasNatExpr ForcedValue Value builtin, BuiltinHasIterate builtin) =>
+  BuiltinEvaluation IterateArgs builtin m
+evalIterate (IterateArgs t f n e) = do
+  fn <- forceValue n
+  case fn of
+    INatLiteral 0 -> return $ Evaluated e
+    INatLiteral v -> do
+      let recFn = Forced $ mkBuiltin accessIterateBuiltin () [t, explicit f, explicit (Forced $ INatLiteral (v - 1))]
+      return $ Evaluated (UnforcedApp f [explicit recFn, explicit e])
+    _ -> return $ Unevaluated [fn]
+
+-----------------------------------------------------------------------------
+-- Utilities
+
+forceDim ::
+  (MonadNorm builtin m, HasNatExpr ForcedValue Value builtin) =>
+  Value builtin ->
+  m (Maybe TensorDimension)
+forceDim value = do
+  forcedValue <- forceValue value
+  return $ case forcedValue of
+    INatLiteral n -> Just n
+    _ -> Nothing
+
+forceDimsHead ::
+  (MonadNorm builtin m, HasNatType ForcedValue Value builtin, HasNatExpr ForcedValue Value builtin, HasListExpr ForcedValue Value builtin) =>
+  Value builtin ->
+  m (Maybe (TensorDimension, Value builtin))
+forceDimsHead value = do
+  forcedValue <- forceValue value
+  case forcedValue of
+    ICons _ d ds -> do
+      maybeDim <- forceDim d
+      return $ (,ds) <$> maybeDim
+    _ -> return Nothing
+
+forceDimsExprs ::
+  (MonadNorm builtin m, HasNatType ForcedValue Value builtin, HasNatExpr ForcedValue Value builtin, HasListExpr ForcedValue Value builtin) =>
+  Value builtin ->
+  m (Either (ForcedValue builtin) [Value builtin])
+forceDimsExprs value = do
+  forcedValue <- forceValue value
+  case forcedValue of
+    INil _ -> return $ Right []
+    ICons _ d ds -> ((d :) <$>) <$> forceDimsExprs ds
+    e -> return $ Left e
+
+forceDims ::
+  (MonadNorm builtin m, HasNatType ForcedValue Value builtin, HasNatExpr ForcedValue Value builtin, HasListExpr ForcedValue Value builtin) =>
+  Value builtin ->
+  m (Maybe TensorShape)
+forceDims value = do
+  forcedValue <- forceDimsExprs value
+  case forcedValue of
+    Left {} -> return Nothing
+    Right xs -> sequence <$> traverse forceDim xs
+
+extractPartialShape ::
+  forall m.
+  (MonadNorm Builtin m) =>
+  Value Builtin ->
+  m PartiallyKnownTensorShape
+extractPartialShape v = do
+  (knownPrefix, unknownSuffix) <- go v
+  return $ PartiallyKnownTensorShape knownPrefix unknownSuffix
+  where
+    go :: Value Builtin -> m (TensorShape, ForcedValue Builtin)
+    go value = do
+      forcedValue <- forceValue value
+      case forcedValue of
+        ICons _ dim dims -> do
+          forcedDim <- forceValue dim
+          case forcedDim of
+            INatLiteral d -> first (d :) <$> go dims
+            _ -> return ([], forcedValue)
+        _ -> return ([], forcedValue)
 
 -----------------------------------------------------------------------------
 -- Logging
 
-showFusionEntry :: (MonadLogger m, PrintableBuiltin builtin) => NamedBoundCtx -> expr builtin -> m ()
-showFusionEntry _ctx _expr = return ()
+showFusionEntry :: (MonadLogger m, PrintableBuiltin builtin) => NamedBoundCtx -> ForcedValue builtin -> m ()
+showFusionEntry _ctx _ForcedValue = return ()
 
-showFusionExit :: (MonadLogger m, PrintableBuiltin builtin) => NamedBoundCtx -> expr builtin -> m (expr builtin)
-showFusionExit _ctx result = return result
+showFusionExit :: (MonadLogger m, PrintableBuiltin builtin) => NamedBoundCtx -> ForcedValue builtin -> m (ForcedValue builtin)
+showFusionExit _ctx = return
 
 {-
-showFusionEntry :: (MonadLogger m, PrintableBuiltin builtin) => NamedBoundCtx -> expr builtin -> m ()
-showFusionEntry ctx expr = do
-  logDebug MidDetail $ "fusion-entry" <+> prettyFriendly (WithContext expr ctx)
-  -- logDebug MidDetail $ "nbe-entry" <+> prettyFriendly (WithContext expr (boundEnvToCtx boundEnv)) <+> "   { boundEnv =" <+> prettyFriendly boundEnv <+> "}"
-  -- logDebug MidDetail $ "nbe-entry" <+> prettyVerbose expr -- <+> "   { boundEnv=" <+> prettyVerbose boundEnv <+> "}"
+showFusionEntry :: (MonadLogger m, PrintableBuiltin builtin) => NamedBoundCtx -> ForcedValue builtin -> m ()
+showFusionEntry ctx ForcedValue = do
+  logDebug MidDetail $ "fusion-entry" <+> prettyFriendly (WithContext ForcedValue ctx)
+  -- logDebug MidDetail $ "nbe-entry" <+> prettyFriendly (WithContext ForcedValue (boundEnvToCtx boundEnv)) <+> "   { boundEnv =" <+> prettyFriendly boundEnv <+> "}"
+  -- logDebug MidDetail $ "nbe-entry" <+> prettyVerbose ForcedValue -- <+> "   { boundEnv=" <+> prettyVerbose boundEnv <+> "}"
   incrCallDepth
   return ()
 
-showFusionExit :: (MonadLogger m, PrintableBuiltin builtin) => NamedBoundCtx -> expr builtin -> m (expr builtin)
+showFusionExit :: (MonadLogger m, PrintableBuiltin builtin) => NamedBoundCtx -> ForcedValue builtin -> m (ForcedValue builtin)
 showFusionExit ctx result = do
   decrCallDepth
   -- logDebug MidDetail $ "nbe-exit" <+> prettyVerbose result
@@ -720,24 +739,24 @@ showFusionExit ctx result = do
 fusionEnter ::
   (MonadLogger m, PrintableBuiltin builtin) =>
   NamedBoundCtx ->
-  expr builtin ->
+  ForcedValue builtin ->
   m ()
 fusionEnter _ctx _value = return ()
 
 fusionExit ::
   (MonadLogger m, PrintableBuiltin builtin) =>
   NamedBoundCtx ->
-  Maybe (VDims builtin, expr builtin) ->
-  m (Maybe (VDims builtin, expr builtin))
-fusionExit _ctx result = return result
+  Maybe (VDims builtin, ForcedValue builtin) ->
+  m (Maybe (VDims builtin, ForcedValue builtin))
+fusionExit _ctx = return
 
 {-
-fusionEnter :: (MonadLogger m, PrintableBuiltin builtin) => NamedBoundCtx -> expr builtin -> m ()
+fusionEnter :: (MonadLogger m, PrintableBuiltin builtin) => NamedBoundCtx -> ForcedValue builtin -> m ()
 fusionEnter ctx value = do
   logDebug MaxDetail $ "fusion-enter" <+> prettyFriendly (WithContext value ctx)
   incrCallDepth
 
-fusionExit :: (MonadLogger m, PrintableBuiltin builtin) => NamedBoundCtx -> Maybe (VArg builtin, expr builtin) -> m (Maybe (VArg builtin, expr builtin))
+fusionExit :: (MonadLogger m, PrintableBuiltin builtin) => NamedBoundCtx -> Maybe (VArg builtin, ForcedValue builtin) -> m (Maybe (VArg builtin, ForcedValue builtin))
 fusionExit ctx result = do
   decrCallDepth
   logDebug MaxDetail $

@@ -11,6 +11,7 @@ import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Code.Value
 import Vehicle.Data.MaybeTrivial (MaybeTrivialT, mapMaybeTrivialT)
 import Vehicle.Data.Tensor (TensorShape)
+import Vehicle.Data.Tensor.Traversal (PartiallyKnownTensorShape)
 import Vehicle.Data.Variable.Bound.Context.Core
 import Vehicle.Data.Variable.Bound.Context.Generic.Core
 import Vehicle.Data.Variable.Bound.Context.Name
@@ -139,7 +140,7 @@ lookupVariableInNestedCtx lv = do
 -- bound variables are in scope.
 class (MonadReadableTensorBoundContext m) => MonadTensorBoundContext m where
   addNonTensorBinderToContext :: VBinder Builtin -> m a -> m a
-  addTensorBinderToContext :: VDims Builtin -> VBinder Builtin -> m a -> m a
+  addTensorBinderToContext :: PartiallyKnownTensorShape -> VBinder Builtin -> m a -> m a
   addTensorBinderToContextPermenantly :: Provenance -> Name -> TensorShape -> m NestedSliceVariable
 
 instance (Monoid w, MonadTensorBoundContext m) => MonadTensorBoundContext (WriterT w m) where

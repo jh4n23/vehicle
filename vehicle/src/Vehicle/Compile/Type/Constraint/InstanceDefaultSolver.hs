@@ -9,8 +9,9 @@ import Data.Foldable (minimumBy)
 import Data.Maybe (catMaybes, mapMaybe)
 import Data.Ord (comparing)
 import Data.Proxy (Proxy (..))
+import Vehicle.Compile.Normalise.Quote
 import Vehicle.Compile.Prelude
-import Vehicle.Compile.Print (PrettyVerbose, prettyVerbose)
+import Vehicle.Compile.Print (prettyExternal, prettyVerbose)
 import Vehicle.Compile.Type.Constraint.InstanceSolver (acceptCandidate)
 import Vehicle.Compile.Type.Core
 import Vehicle.Compile.Type.Meta.Set qualified as MetaSet
@@ -51,16 +52,15 @@ addNewInstanceConstraintUsingDefaults proxy = do
     Nothing -> return False
 
 getDefaultableConstraints ::
-  forall constraint ctx builtin m.
-  (MonadInstanceDefault builtin m, HasMetas constraint, PrettyVerbose (Contextualised constraint ctx)) =>
+  forall builtin m.
+  (MonadInstanceDefault builtin m) =>
   Proxy builtin ->
-  [Contextualised constraint ctx] ->
-  m [Contextualised constraint ctx]
+  [Contextualised (InstanceConstraint builtin) (ConstraintContext builtin)] ->
+  m [Contextualised (InstanceConstraint builtin) (ConstraintContext builtin)]
 getDefaultableConstraints proxy possibleConstraints = do
   maybeDecl <- getCurrentDeclAndUnused @builtin
   result <- case maybeDecl of
     Just (DefFunction _ _ _ t _, declIsUnused) | not declIsUnused -> do
-      logDebug MaxDetail $ pretty declIsUnused
       -- We only want to generate default solutions for constraints
       -- that *don't* appear in the type of the declaration, as those will be
       -- quantified over later. However, if the declaration is unused then
@@ -73,14 +73,15 @@ getDefaultableConstraints proxy possibleConstraints = do
         return $ "Metas transitively related to type-signature:" <+> lineIndent unsolvedMetasInTypeDoc
 
       flip filterM possibleConstraints $ \tc -> do
-        let constraintMetas = metasIn (objectIn tc)
+        let goalExpr = unnormalise (contextDBLevel $ contextOf tc) $ forcedGoalValue $ instanceGoal $ objectIn tc :: Expr builtin
+        let constraintMetas = metasIn goalExpr
         return $ MetaSet.disjoint constraintMetas typeMetas
     _ -> return possibleConstraints
 
   logDebug MaxDetail $
     "Suitable defaultable constraints:"
       <> line
-      <> indent 2 (prettySetLike (fmap prettyVerbose result))
+      <> indent 2 (prettySetLike (fmap prettyExternal result))
       <> line
 
   return result

@@ -4,7 +4,6 @@ module Vehicle.Compile.Type.Meta
     MetaInfo (..),
     extendMetaCtx,
     HasMetas (..),
-    makeMetaType,
     getMetaDependencies,
     findMetaInfo,
     findUltimateUnsolvedMeta,
@@ -15,7 +14,6 @@ import Vehicle.Compile.Prelude
 import Vehicle.Compile.Type.Meta.Set (MetaSet)
 import Vehicle.Compile.Type.Meta.Variable
 import Vehicle.Data.Builtin.Interface.Print
-import Vehicle.Data.Code.Value (GluedExpr (..))
 
 findUltimateUnsolvedMeta ::
   (MonadLogger m, PrintableBuiltin builtin) =>
@@ -25,7 +23,7 @@ findUltimateUnsolvedMeta ::
 findUltimateUnsolvedMeta ctx meta = do
   let metaInfo = findMetaInfo ctx meta
   maybeNextMeta <- case metaSolution metaInfo of
-    Just solution -> findMetaInSolution ctx $ unnormalised solution
+    Just solution -> findMetaInSolution ctx solution
     Nothing -> return Nothing
 
   case maybeNextMeta of

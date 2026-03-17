@@ -171,7 +171,7 @@ lookupCorrespondingInputVar var = do
       Just $
         VariableInfo
           { parentVariable = toTensorVar inputVar,
-            parentShape = toPartialShape (shapeOf nestedSliceVar) Nothing,
+            parentShape = toPartialShape (shapeOf nestedSliceVar),
             indices = indices
           }
 
@@ -191,7 +191,7 @@ checkAllBoundsPresent (Partial allPartialbounds assertions) = do
     case Map.lookup var allPartialbounds of
       Nothing -> errorCase wholeTensorUnbounded
       Just partialBounds -> do
-        let partialShape = toPartialShape varShape Nothing
+        let partialShape = toPartialShape varShape
         missingIndicesOrFlattenedBounds <- fourierMotzkinTensorBoundsElimination partialShape partialBounds
         case missingIndicesOrFlattenedBounds of
           Right bounds -> return $ Right (BoundedValue var bounds)

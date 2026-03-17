@@ -13,7 +13,7 @@ import Control.Monad.IO.Class
 import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.State (MonadState (..), MonadTrans (..), StateT (..), evalStateT, gets, mapStateT, modify)
 import Vehicle.Compile.Prelude
-import Vehicle.Data.Tensor.Traversal (PartiallyKnownTensorShape (..), extractPartialShape)
+import Vehicle.Data.Tensor.Traversal (PartiallyKnownTensorShape (..))
 import Vehicle.Data.Variable.Bound.Context.Name.Class (MonadReadableNameContext (..), getBinderDepth)
 import Vehicle.Data.Variable.Bound.Context.Tensor.Class
 import Vehicle.Data.Variable.Bound.Context.Tensor.Core
@@ -92,9 +92,8 @@ instance (Monad m) => MonadTensorBoundContext (TensorBoundContextT m) where
       localState (appendNonTensorVariableToNestedCtx $ void binder) $
         unTensorBoundContextT action
 
-  addTensorBinderToContext dims binder action =
+  addTensorBinderToContext partialShape binder action =
     TensorBoundContextT $ do
-      let partialShape = extractPartialShape dims
       localState (appendTensorVariableToNestedCtx (void binder) (knownPrefix partialShape)) $
         unTensorBoundContextT action
 

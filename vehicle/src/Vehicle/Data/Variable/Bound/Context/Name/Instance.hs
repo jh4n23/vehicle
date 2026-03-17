@@ -83,3 +83,6 @@ instance (Monad m) => MonadReadableNameContext (NameBoundContextT m) where
 instance (Monad m) => MonadNameContext (NameBoundContextT m) where
   addNameToContext binder cont = NameBoundContextT $ do
     local (nameOf binder :) (unNameBoundContextT cont)
+
+instance (MonadIO m) => MonadIO (NameBoundContextT m) where
+  liftIO = lift . liftIO

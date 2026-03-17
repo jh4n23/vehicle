@@ -1,7 +1,6 @@
 module Vehicle.Compile.Type.Meta.Variable
   ( MetaInfo (..),
     extendMetaCtx,
-    makeMetaType,
     getMetaDependencies,
     HasMetas (..),
     MetaVariableContext,
@@ -12,15 +11,13 @@ where
 
 import Control.Monad.Writer (MonadWriter (..), execWriter)
 import Data.List.NonEmpty (NonEmpty)
-import Data.Map.Ordered qualified as OMap
-import Data.Maybe (fromMaybe)
+import Vehicle.Compile.Normalise.Quote (unnormalise)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Type.Core
 import Vehicle.Compile.Type.Meta.Map (MetaMap)
 import Vehicle.Compile.Type.Meta.Map qualified as MetaMap
 import Vehicle.Compile.Type.Meta.Set (MetaSet)
 import Vehicle.Compile.Type.Meta.Set qualified as MetaSet
-import Vehicle.Data.Code.Value
 import Vehicle.Data.Variable.Bound.Context.Generic.Core
 
 -- Eventually when metas make into the builtins, this should module
@@ -38,8 +35,9 @@ data MetaInfo builtin = MetaInfo
     -- | The number of bound variables in scope when the meta-variable was created.
     metaCtx :: BoundCtx (Expr builtin),
     -- | The solution to the meta variable
-    metaSolution :: Maybe (GluedExpr builtin)
+    metaSolution :: Maybe (Expr builtin)
   }
+  deriving (Show)
 
 extendMetaCtx :: Binder builtin -> MetaInfo builtin -> MetaInfo builtin
 extendMetaCtx binder MetaInfo {..} =
@@ -47,25 +45,6 @@ extendMetaCtx binder MetaInfo {..} =
     { metaCtx = binder : metaCtx,
       ..
     }
-
-addSolutionToInfo :: GluedExpr builtin -> MetaInfo builtin -> MetaInfo builtin
-addSolutionToInfo solution info = info {metaSolution = Just solution}
-
--- | Creates a Pi type that abstracts over all bound variables
-makeMetaType ::
-  BoundCtx (Type builtin) ->
-  Provenance ->
-  Type builtin ->
-  Type builtin
-makeMetaType boundCtx p resultType = foldr entryToPi resultType (reverse boundCtx)
-  where
-    entryToPi ::
-      Binder builtin ->
-      Type builtin ->
-      Type builtin
-    entryToPi binder = do
-      let n = fromMaybe "_" (nameOf binder)
-      Pi p (Binder (BinderDisplayForm (OnlyName n mempty) True) Explicit (relevanceOf binder) (typeOf binder))
 
 getMetaDependencies :: [Arg builtin] -> [Ix]
 getMetaDependencies = \case
@@ -96,26 +75,6 @@ instance HasMetas (Expr builtin) where
     Record _ _ fields -> findMetas $ fmap snd fields
     RecordProj _ recordType record _ -> do findMetas recordType; findMetas record
 
-instance HasMetas (Value builtin) where
-  findMetas expr = case expr of
-    VMeta m spine -> do
-      tell (MetaSet.singleton m)
-      findMetas spine
-    VUniverse {} -> return ()
-    VBuiltin _ spine -> findMetas spine
-    VFreeVar _ spine -> findMetas spine
-    VBoundVar _ spine -> findMetas spine
-    VPi binder closure -> do findMetas binder; findMetas closure
-    VLam binder closure -> do findMetas binder; findMetas closure
-    VRecord _ fields -> findMetas (snd <$> OMap.assocs fields)
-    VRecordAcc recordType record _ spine -> do
-      findMetas recordType
-      findMetas record
-      findMetas spine
-
-instance HasMetas (Closure builtin) where
-  findMetas (Closure env expr) = do traverseEnv_ findMetas env; findMetas expr
-
 instance (HasMetas expr) => HasMetas (GenericArg expr) where
   findMetas = mapM_ findMetas
 
@@ -128,16 +87,16 @@ instance (HasMetas a) => HasMetas [a] where
 instance (HasMetas a) => HasMetas (NonEmpty a) where
   findMetas = mapM_ findMetas
 
-instance HasMetas (InstanceConstraint builtin) where
-  findMetas (Resolve _ m _ _ goal) = do
+instance HasMetas (Contextualised (InstanceConstraint builtin) (ConstraintContext builtin)) where
+  findMetas (WithContext (Resolve _ m _ _ goal) ctx) = do
     tell (MetaSet.singleton m)
-    findMetas goal
+    let argExprs = fmap (unnormalise (contextDBLevel ctx) . argExpr) (goalSpine goal) :: [Expr builtin]
+    findMetas argExprs
 
-instance HasMetas (InstanceGoal builtin) where
-  findMetas (InstanceGoal _ _ spine) = findMetas spine
-
-instance HasMetas (UnificationConstraint builtin) where
-  findMetas (Unify _ e1 e2) = do findMetas e1; findMetas e2
+instance HasMetas (Contextualised (UnificationConstraint builtin) (ConstraintContext builtin)) where
+  findMetas (WithContext (Unify _ e1 e2) ctx) = do
+    findMetas (unnormalise (contextDBLevel ctx) e1 :: Expr builtin)
+    findMetas (unnormalise (contextDBLevel ctx) e2 :: Expr builtin)
 
 instance HasMetas (ArgInsertionProblem builtin) where
   findMetas ArgInsertionProblem {..} = do
@@ -148,10 +107,10 @@ instance HasMetas (ArgInsertionProblem builtin) where
 instance HasMetas (ApplicationConstraint builtin) where
   findMetas (InferArgs _ _ insertionProblem) = findMetas insertionProblem
 
-instance HasMetas (Constraint builtin) where
-  findMetas = \case
-    UnificationConstraint c -> findMetas c
-    InstanceConstraint c -> findMetas c
+instance HasMetas (Contextualised (Constraint builtin) (ConstraintContext builtin)) where
+  findMetas (WithContext constraint ctx) = case constraint of
+    UnificationConstraint c -> findMetas (WithContext c ctx)
+    InstanceConstraint c -> findMetas (WithContext c ctx)
     ApplicationConstraint c -> findMetas c
 
 --------------------------------------------------------------------------------
@@ -167,5 +126,5 @@ findMetaInfo ctx meta =
       developerError $
         "Requesting info for unknown meta" <+> pretty meta <+> "not in context"
 
-addMetaSolution :: GluedExpr builtin -> MetaID -> MetaVariableContext builtin -> MetaVariableContext builtin
-addMetaSolution solution = MetaMap.adjust (addSolutionToInfo solution)
+addMetaSolution :: Expr builtin -> MetaID -> MetaVariableContext builtin -> MetaVariableContext builtin
+addMetaSolution solution = MetaMap.adjust (\info -> info {metaSolution = Just solution})

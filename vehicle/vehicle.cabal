@@ -144,6 +144,7 @@ library
     Vehicle.Compile.Constants.Rational
     Vehicle.Compile.Constants.Value
     Vehicle.Compile.Descope
+    Vehicle.Compile.EquivalenceLaws
     Vehicle.Compile.Error
     Vehicle.Compile.ExpandResources
     Vehicle.Compile.ExpandResources.Core
@@ -151,6 +152,7 @@ library
     Vehicle.Compile.ExpandResources.Network
     Vehicle.Compile.ExpandResources.Parameter
     Vehicle.Compile.Monomorphisation
+    Vehicle.Compile.Normalise.Core
     Vehicle.Compile.Normalise.NBE
     Vehicle.Compile.Normalise.Quote
     Vehicle.Compile.Prelude
@@ -216,7 +218,6 @@ library
     Vehicle.Compile.ExpandResources.Dataset.IDX
     Vehicle.Compile.FunctionaliseResources
     Vehicle.Compile.LiftIf
-    Vehicle.Compile.LiftMinMax
     Vehicle.Compile.LowerNot
     Vehicle.Compile.Prelude.Utils
     Vehicle.Compile.Print.Warning
@@ -238,7 +239,6 @@ library
     Vehicle.Compile.Type.Constraint.InstanceSolver
     Vehicle.Compile.Type.Constraint.UnificationSolver
     Vehicle.Compile.Type.Core
-    Vehicle.Compile.Type.Force
     Vehicle.Compile.Type.Generalise
     Vehicle.Compile.Type.Irrelevance
     Vehicle.Compile.Type.Meta
@@ -251,7 +251,10 @@ library
     Vehicle.Compile.Type.Monad.Instance
     Vehicle.Compile.Type.Subsystem
     Vehicle.Compile.Type.System
-    Vehicle.Compile.Unblock
+    Vehicle.Compile.TypedView
+    Vehicle.Compile.TypedView.Core
+    Vehicle.Compile.TypedView.Purification
+    Vehicle.Compile.TypedView.Unblock
     Vehicle.Compile.Variable
     Vehicle.Data.Assertion
     Vehicle.Data.AST
@@ -297,7 +300,6 @@ library
     Vehicle.Data.Code.Interface.Operations
     Vehicle.Data.Code.Interface.Patterns
     Vehicle.Data.Code.ModuleInterface
-    Vehicle.Data.Code.TypedView
     Vehicle.Data.DifferentiableLogic
     Vehicle.Data.Universe
     Vehicle.Data.Variable.Bound.Context.Core
@@ -357,6 +359,7 @@ library
     , directory              >=1.3.6    && <1.4
     , disjoint-containers    >=0.3.0    && <1
     , edit-distance          >=0.2.2    && <1
+    , enummapset             >=0.7      && <1
     , file-embed             >=0.0.15.0 && <0.1
     , filepath               >=1.4      && <2
     , gitrev                 >=1.3      && <2

@@ -1,6 +1,3 @@
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
-{-# HLINT ignore "Use list literal" #-}
 module Vehicle.Compile.Type.Generalise
   ( generaliseOverUnsolvedMetasAndConstraints,
   )
@@ -14,6 +11,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
 import Vehicle.Compile.Error
+import Vehicle.Compile.Normalise.Quote
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
 import Vehicle.Compile.Type.Constraint.UnificationSolver (UnificationResult (..), unify)
@@ -26,6 +24,7 @@ import Vehicle.Compile.Type.Monad
 import Vehicle.Compile.Type.Monad.Class
 import Vehicle.Data.Builtin.Interface.Print (PrintableBuiltin)
 import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin)
+import Vehicle.Data.Code.Value (Value (..))
 import Vehicle.Data.Variable.Bound.Context.Generic
 
 --------------------------------------------------------------------------------
@@ -90,10 +89,10 @@ removeAllDependencies decl = do
     setAuxiliaryInstanceConstraints mergedAuxiliaryInstanceConstraints
 
   -- Substitute through the new metas variables through the types of the meta variables
-  logCompilerSection2 MaxDetail "substituting metas through solution" $ do
-    metaVariableCtx <- getMetaVariableCtx @builtin
-    substMetaVariableCtx <- substMetaVariables metaVariableCtx
-    modifyTypeCheckerDeclState (\s -> s {metaVariableCtx = substMetaVariableCtx})
+  -- logCompilerSection2 MaxDetail "substituting metas through solution" $ do
+  --   metaVariableCtx <- getMetaVariableCtx @builtin
+  --   substMetaVariableCtx <- substMetaVariables metaVariableCtx
+  --   modifyTypeCheckerDeclState (\s -> s {metaVariableCtx = substMetaVariableCtx})
 
   resultDecl <- substMetaVariables decl
   logUnsolvedUnknowns (Proxy @builtin)
@@ -107,8 +106,8 @@ removeInstanceDependencies c@(WithContext constraint ctx) =
   logCompilerSection MaxDetail "Removing dependencies:" $ do
     logDebug MaxDetail $ "Input: " <+> prettyExternal c
     let newCtx = updateConstraintBoundCtx ctx (const mempty)
-    substConstraint <- substMetaVariablesAt (namedBoundCtxOf ctx) constraint
-    let result = WithContext substConstraint newCtx
+    -- substConstraint <- substMetaVariablesAt (namedBoundCtxOf ctx) constraint
+    let result = WithContext constraint newCtx
     logDebug MaxDetail $ "Output:" <+> prettyExternal result
     return result
 
@@ -124,7 +123,7 @@ mergeInstanceConstraints constraints = do
 
   let constraintsBySolutionMeta = MetaMap.toList $ MetaMap.fromListWith (<>) substitutedConstraintsByMeta
   mergedConstraints <- forM constraintsBySolutionMeta $ \(_meta, masterConstraint :| otherConstraints) -> do
-    let getGoal = goalExpr . instanceGoal . objectIn
+    let getGoal = Forced . forcedGoalValue . instanceGoal . objectIn
     let mainGoal = getGoal masterConstraint
     forM_ otherConstraints $ \otherConstraint -> do
       let secDoc = "Merging" <+> prettyExternal otherConstraint <+> "into" <> line <> prettyExternal masterConstraint
@@ -149,8 +148,11 @@ updateSolutionMeta constraint = do
   let originalMeta = instanceSolution constraint
   metaCtx <- metaVariableCtx <$> getTypeCheckerDeclState @builtin
   newMeta <- findUltimateUnsolvedMeta metaCtx originalMeta
+
   -- This is a hack that should disappear when we get records?
-  updateMetaType newMeta (goalExpr $ instanceGoal constraint)
+  let goalType = unnormalise 0 $ forcedGoalValue $ instanceGoal constraint
+  updateMetaType @builtin newMeta goalType
+
   return $ constraint {instanceSolution = newMeta}
 
 --------------------------------------------------------------------------------
@@ -255,7 +257,7 @@ prependBinderAndSolve decl (meta, binder) =
       _ ->
         developerError $
           "Unsupported definition type in generalistion:"
-            <> lineIndent (prettyVerbose substDecl)
+            <> lineIndent (prettyExternal substDecl)
 
     -- Substitute the new meta solution through.
     setCurrentDecl $ Just (finalDecl, False)

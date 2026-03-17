@@ -20,11 +20,14 @@ import Data.Vector.Unboxed (Vector)
 import Data.Vector.Unboxed qualified as Vector
 import Vehicle.Compile.Error
 import Vehicle.Compile.ExpandResources.Core
+import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
+import Vehicle.Compile.TypedView
+import Vehicle.Data.Builtin.Interface.Normalise (forceDimsExprs)
 import Vehicle.Data.Builtin.Standard
+import Vehicle.Data.Builtin.Standard.Normalise
 import Vehicle.Data.Code.Interface
-import Vehicle.Data.Code.TypedView
 import Vehicle.Data.Code.Value
 import Vehicle.Data.Tensor as Tensor (Tensor, TensorShape, fromVector, mapTensor)
 
@@ -37,7 +40,7 @@ readIDX ::
   (MonadExpandResources m, MonadIO m) =>
   FilePath ->
   DeclProvenance ->
-  GluedType Builtin ->
+  Type Builtin ->
   m (Value Builtin)
 readIDX file decl expectedType = do
   contents <- readIDXFile decl file
@@ -79,7 +82,7 @@ parseIDX ::
   Vector a ->
   m (Value Builtin)
 parseIDX ctx@(_, _, expectedDatasetType, actualDatasetDims, _) elems =
-  parseContainer ctx 0 actualDatasetDims elems (normalised expectedDatasetType)
+  parseContainer ctx 0 actualDatasetDims elems (thunkifyExpr emptyBoundEnv expectedDatasetType)
 
 parseContainer ::
   (MonadExpandResources m, Vector.Unbox a) =>
@@ -89,16 +92,15 @@ parseContainer ::
   Vector a ->
   VType Builtin ->
   m (Value Builtin)
-parseContainer ctx currentDim actualDims elems expectedType = case toTypeValue expectedType of
-  VListType expectedElemType -> parseList ctx currentDim expectedElemType actualDims elems
-  VVectorType expectedElemType dim -> parseVector ctx currentDim expectedElemType dim actualDims elems
-  VBoolTensorType expectedDims -> parseTensor ctx currentDim actualDims elems (fromTypeValue VBoolType) expectedDims
-  VRatTensorType expectedDims -> parseTensor ctx currentDim actualDims elems (fromTypeValue VRatType) expectedDims
-  VNatTensorType expectedDims -> parseTensor ctx currentDim actualDims elems (fromTypeValue VNatType) expectedDims
-  VIndexTensorType n expectedDims -> parseTensor ctx currentDim actualDims elems (fromTypeValue $ VIndexType n) expectedDims
-  _
-    | currentDim == 0 -> typingError ctx
-    | otherwise -> parseElements ctx actualDims elems expectedType
+parseContainer ctx currentDim actualDims elems expectedType = do
+  forcedExpectedType <- forceValue expectedType
+  case toTypeValue forcedExpectedType of
+    VListType expectedElemType -> parseList ctx currentDim expectedElemType actualDims elems
+    VVectorType expectedElemType dim -> parseVector ctx currentDim expectedElemType dim actualDims elems
+    VTensorType tElem expectedDims -> parseTensor ctx currentDim actualDims elems tElem expectedDims
+    _
+      | currentDim == 0 -> typingError ctx
+      | otherwise -> parseElements ctx actualDims elems expectedType
 
 parseTensor ::
   (MonadExpandResources m, Vector.Unbox a) =>
@@ -120,12 +122,14 @@ checkTensorDimensions ::
   VType Builtin ->
   TensorShape ->
   m ()
-checkTensorDimensions ctx dimNo expectedShape actualShape = case (toDimensionsValue expectedShape, actualShape) of
-  (VDimsNil, []) -> return ()
-  (VDimsCons dim dims, d : ds) -> do
-    checkDimension ctx dimNo dim d
-    checkTensorDimensions ctx (dimNo + 1) dims ds
-  _ -> dimensionMismatchError ctx
+checkTensorDimensions ctx dimNo expectedShape actualShape = do
+  forcedExpectedShape <- forceValue expectedShape
+  case (toDimensionsValue forcedExpectedShape, actualShape) of
+    (VDimsNil, []) -> return ()
+    (VDimsCons dim dims, d : ds) -> do
+      checkDimension ctx dimNo dim d
+      checkTensorDimensions ctx (dimNo + 1) dims ds
+    _ -> dimensionMismatchError ctx
 
 checkDimension ::
   (MonadExpandResources m) =>
@@ -135,7 +139,8 @@ checkDimension ::
   Int ->
   m ()
 checkDimension ctx@(decl, file, _, _, _) currentDim expectedDimValue actualDim = do
-  case toNatValue expectedDimValue of
+  forcedExpectedDimValue <- forceValue expectedDimValue
+  case toNatValue forcedExpectedDimValue of
     VNatLiteral expectedDim
       | expectedDim == actualDim -> return ()
       | otherwise -> do
@@ -184,7 +189,7 @@ parseVector ctx currentDim expectedElemType expectedDim actualDims actualElems =
       checkDimension ctx currentDim expectedDim d
       let splitElems = partitionData d ds actualElems
       exprs <- traverse (\es -> parseContainer ctx (currentDim + 1) ds es expectedElemType) splitElems
-      return $ IVecLiteral expectedElemType expectedDim exprs
+      return $ Forced $ IVecLiteral expectedElemType expectedDim exprs
 
 parseElements ::
   (MonadExpandResources m, Vector.Unbox a) =>
@@ -198,7 +203,7 @@ parseElements (_, _, _, _, elemParser) = elemParser
 type ParseContext m a =
   ( DeclProvenance, -- The provenance of the dataset declaration
     FilePath, -- The path of the dataset
-    GluedType Builtin, -- The overall dataset type
+    Type Builtin, -- The overall dataset type
     TensorShape, -- Actual dimensions of dataset
     ElemParser m a
   )
@@ -208,34 +213,38 @@ type ElemParser m a = TensorShape -> Vector a -> VType Builtin -> m (Value Built
 doubleElemParser ::
   (MonadExpandResources m) =>
   DeclProvenance ->
-  GluedType Builtin ->
+  Type Builtin ->
   FilePath ->
   ElemParser m Double
-doubleElemParser decl datasetType file dims values expectedElementType =
-  case toTypeValue expectedElementType of
+doubleElemParser decl datasetType file dims values expectedElementType = do
+  forcedExpectedElementType <- forceValue expectedElementType
+  case toTypeValue forcedExpectedElementType of
     VRatType {} -> do
-      return $ IRatTensor (mapTensor toRational (toTensor dims values))
+      return $ Forced $ IRatTensor (mapTensor toRational (toTensor dims values))
     _ -> do
       throwError $ DatasetTypeMismatch decl file datasetType expectedElementType "Rat"
 
 intElemParser ::
   (MonadExpandResources m) =>
   DeclProvenance ->
-  GluedType Builtin ->
+  Type Builtin ->
   FilePath ->
   ElemParser m Int
 intElemParser decl datasetType file dims values expectedElementType = do
-  case toTypeValue expectedElementType of
-    VIndexType dim@(INatLiteral n) -> case (dims, Vector.toList values) of
-      ([], [value]) -> do
-        if 0 <= value && value < n
-          then return $ IIndexLiteral value dim
-          else throwError $ DatasetInvalidIndex decl file value n
-      _ -> developerError "Should not be parsing tensors of indices"
+  forcedExpectedElementType <- forceValue expectedElementType
+  case toTypeValue forcedExpectedElementType of
+    VIndexType dim -> do
+      forcedExpectedDim <- forceValue dim
+      case (forcedExpectedDim, dims, Vector.toList values) of
+        (INatLiteral n, [], [value]) -> do
+          if 0 <= value && value < n
+            then return $ Forced $ IIndexLiteral value dim
+            else throwError $ DatasetInvalidIndex decl file value n
+        _ -> developerError "Should not be parsing tensors of indices"
     VNatType {} -> do
       let invalid = Vector.filter (< 0) values
       if Vector.null invalid
-        then return $ INatTensor (toTensor dims values)
+        then return $ Forced $ INatTensor (toTensor dims values)
         else throwError $ DatasetInvalidNat decl file (Vector.head invalid)
     _ ->
       throwError $ DatasetTypeMismatch decl file datasetType expectedElementType "Int"
@@ -254,13 +263,30 @@ variableSizeError :: (MonadCompile m) => ParseContext m a -> Value Builtin -> m 
 variableSizeError (decl, _, expectedDatasetType, _, _) dim =
   throwError $ DatasetVariableSizeTensor decl expectedDatasetType dim
 
-dimensionMismatchError :: (MonadCompile m) => ParseContext m a -> m b
-dimensionMismatchError (decl, file, expectedDatasetType, actualDatasetDims, _) =
-  throwError $ DatasetDimensionsMismatch decl file expectedDatasetType actualDatasetDims
+dimensionMismatchError :: forall m a b. (MonadExpandResources m) => ParseContext m a -> m b
+dimensionMismatchError (decl, file, expectedDatasetType, actualDatasetDims, _) = do
+  expectedDimensions <- dimensionsOf $ thunkifyExpr emptyBoundEnv expectedDatasetType
+  throwError $ DatasetDimensionsMismatch decl file expectedDimensions actualDatasetDims
+  where
+    dimensionsOf :: VType Builtin -> m (Maybe Int)
+    dimensionsOf typ = do
+      forcedType <- forceValue typ
+      case toTypeValue forcedType of
+        VTensorType _ dims -> dimLength dims
+        VListType tElem -> fmap (+ 1) <$> dimensionsOf tElem
+        VVectorType tElem _dims -> fmap (+ 1) <$> dimensionsOf tElem
+        _ -> return $ Just 0
+
+    dimLength :: Value Builtin -> m (Maybe Int)
+    dimLength dimsValue = do
+      maybeForcedDims <- forceDimsExprs dimsValue
+      return $ case maybeForcedDims of
+        Left {} -> Nothing
+        Right dims -> Just $ length dims
 
 typingError :: (MonadCompile m) => ParseContext m a -> m b
 typingError (_, _, expectedDatasetType, _, _) =
   compilerDeveloperError $
     "Invalid dataset type"
-      <+> squotes (prettyVerbose (normalised expectedDatasetType))
+      <+> squotes (prettyVerbose expectedDatasetType)
       <+> "should have been caught during type-checking"

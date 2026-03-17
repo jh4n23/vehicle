@@ -33,6 +33,7 @@ instance TypableBuiltin PolarityBuiltin where
   useDependentMetas _ = False
   isConstructor = isPolarityBuiltinConstructor
   isCastConstraint _ = False
+  coercionArgs _ = Nothing
 
 isPolarityBuiltinConstructor :: PolarityBuiltin -> Bool
 isPolarityBuiltinConstructor = \case

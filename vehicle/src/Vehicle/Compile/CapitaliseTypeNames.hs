@@ -8,12 +8,12 @@ import Control.Monad.State (MonadState (..), evalStateT, modify)
 import Data.Data (Proxy (..))
 import Data.Set (Set, insert, member)
 import Vehicle.Compile.Error (MonadCompile)
-import Vehicle.Compile.Normalise.NBE (evalInEmptyEnv, normaliseClosureInCtx)
+import Vehicle.Compile.Normalise.NBE (MonadNorm, forceValue)
 import Vehicle.Compile.Prelude
 import Vehicle.Data.Builtin.Decidability (DecidabilityBuiltin (..), DecidabilityBuiltinFunction (..))
-import Vehicle.Data.Code.Value (Value (..))
+import Vehicle.Data.Code.Value (ForcedValue (..), Value, emptyBoundEnv, thunkifyExpr)
 import Vehicle.Data.Variable.Bound.Context.Name
-import Vehicle.Data.Variable.Free.Context (MonadFreeContext, addDeclToContext, runFreshFreeContextT)
+import Vehicle.Data.Variable.Free.Context (MonadFreeContext, addDeclEntryToContext, runFreshFreeContextT)
 
 --------------------------------------------------------------------------------
 -- Capitalise type names
@@ -51,7 +51,7 @@ instance CapitaliseTypes [Decl DecidabilityBuiltin] where
       d' <- traverse cap d
       let d'' = if isType then mapIdentifier capitaliseIdentifier d' else d'
 
-      ds' <- addDeclToContext d'' (cap ds)
+      ds' <- addDeclEntryToContext d'' (cap ds)
       return $ d'' : ds'
 
 instance CapitaliseTypes (Expr DecidabilityBuiltin) where
@@ -97,16 +97,24 @@ isTypeDef decl = case decl of
   DefAbstract {} -> return False
   DefRecord {} -> return False
   DefFunction _ _ _ t _ -> do
-    normType <- evalInEmptyEnv t
-    case normType of
+    returnType <-
+      runFreshFreeContextT (Proxy @DecidabilityBuiltin) $
+        runFreshNameBoundContextT $ do
+          findReturnType $ thunkifyExpr emptyBoundEnv t
+    return $ case returnType of
       -- We don't capitalise things of type `Bool` because they will be lifted
       -- to the type level, only things of type `X -> Bool`.
-      VPi {} -> go mempty normType
-      _ -> return False
-  where
-    go :: NamedBoundCtx -> Value DecidabilityBuiltin -> m Bool
-    go _ (VBuiltin (DecidabilityBuiltinFunction PropType) []) = return True
-    go ctx (VPi binder closure) = do
-      result <- normaliseClosureInCtx ctx binder closure
-      go (nameOf binder : ctx) result
-    go _ _ = return False
+      VBuiltin (DecidabilityBuiltinFunction PropType) [] -> True
+      _ -> False
+
+findReturnType ::
+  (MonadNorm DecidabilityBuiltin m, MonadNameContext m) =>
+  Value DecidabilityBuiltin ->
+  m (ForcedValue DecidabilityBuiltin)
+findReturnType typ = do
+  forcedType <- forceValue typ
+  case forcedType of
+    VPi binder closure -> do
+      body <- extendClosureWithBound binder closure
+      addNameToContext binder $ findReturnType body
+    _ -> return forcedType

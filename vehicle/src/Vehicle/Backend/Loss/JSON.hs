@@ -8,12 +8,13 @@ where
 
 import Data.Aeson (ToJSON (..), genericToJSON)
 import Data.List (elemIndex)
+import Data.Proxy (Proxy (..))
 import Data.Ratio (Ratio)
 import GHC.Generics (Generic)
 import Prettyprinter (Pretty (..), (<+>))
 import Vehicle.Compile.Arity
 import Vehicle.Compile.Error
-import Vehicle.Compile.Normalise.NBE (normaliseInEmptyFreeEnv)
+import Vehicle.Compile.Normalise.NBE (MonadNorm, forceValue)
 import Vehicle.Compile.Prelude (Ix (..))
 import Vehicle.Compile.Prelude qualified as S (Binder, Decl, Expr (..), GenericDecl (..), GenericProg (..), Prog)
 import Vehicle.Compile.Prelude.Utils (getNamedBinderInfo)
@@ -30,6 +31,7 @@ import Vehicle.Data.Code.Interface.Args
 import Vehicle.Data.Code.Value
 import Vehicle.Data.Tensor (Tensor, mapTensor)
 import Vehicle.Data.Variable.Bound.Context.Name
+import Vehicle.Data.Variable.Free.Context.Instance (runFreshFreeContextT)
 import Vehicle.Prelude (Doc, GenericArg (..), HasName (..), HasType (..), Identifier (..), Name, Provenance, explicit, indent, jsonOptions, line, mkExplicitBinder, resolutionError, squotes, userModulePath)
 import Vehicle.Prelude.Error (developerError)
 import Vehicle.Prelude.Logging.Class
@@ -42,7 +44,9 @@ convertToJSONProg :: (MonadCompile m) => S.Prog LossBuiltin -> m JProg
 convertToJSONProg prog =
   logCompilerSection2 MinDetail currentPass $ do
     -- relevantProg <- removeIrrelevantCodeFromProg prog
-    runFreshNameBoundContextT $ convertProg prog
+    runFreshFreeContextT (Proxy @LossBuiltin) $
+      runFreshNameBoundContextT $
+        convertProg prog
 
 convertFromJSONProg :: JProg -> S.Prog LossBuiltin
 convertFromJSONProg = fromJProg
@@ -136,7 +140,8 @@ currentPass = "conversion to JSON"
 
 type MonadJSON m =
   ( MonadCompile m,
-    MonadNameContext m
+    MonadNameContext m,
+    MonadNorm LossBuiltin m
   )
 
 unsupportedError :: (Pretty a) => a -> b
@@ -164,12 +169,13 @@ convertDecl = \case
 -- Types
 
 convertType :: (MonadJSON m) => BoundEnv LossBuiltin -> S.Expr LossBuiltin -> m JType
-convertType env body = convertTypeValue =<< normaliseInEmptyFreeEnv mempty env body
+convertType env body = convertTypeValue $ thunkifyExpr env body
 
 convertTypeValue :: (MonadJSON m) => VType LossBuiltin -> m JType
-convertTypeValue expr = do
-  showEntry expr
-  result <- case expr of
+convertTypeValue value = do
+  showEntry value
+  forcedValue <- forceValue value
+  result <- case forcedValue of
     VMeta {} -> resolutionError currentPass "VMeta"
     VFreeVar {} -> resolutionError currentPass "VFreeVar"
     VUniverse {} -> resolutionError currentPass "Universe"
@@ -177,9 +183,10 @@ convertTypeValue expr = do
     VRecordAcc {} -> resolutionError currentPass "VRecordAcc"
     VLam {} -> dependentTypesError ("VLam" :: String)
     VPi binder closure -> do
-      typ' <- convertTypeValue (typeOf binder)
-      closure' <- convertClosure convertType binder closure
-      return $ Pi typ' closure'
+      typ' <- convertTypeValue (Unforced $ typeOf binder)
+      body <- extendClosureWithBound binder closure
+      body' <- addNameToContext binder $ convertTypeValue body
+      return $ Pi typ' body'
     VBuiltin b spine -> convertBuiltinType b spine
     VBoundVar v spine -> do
       name <- lvToProperName mempty v
@@ -209,14 +216,14 @@ convertTensorType spine = case spine of
 
 convertExpr :: (MonadJSON m) => BoundEnv LossBuiltin -> S.Expr LossBuiltin -> m JExpr
 convertExpr env body = do
-  normBody <- normaliseInEmptyFreeEnv mempty env body
-  debugFriendly normBody
-  convertValue normBody
+  debugFriendly body
+  convertValue (thunkifyExpr env body)
 
 convertValue :: (MonadJSON m) => Value LossBuiltin -> m JExpr
-convertValue expr = do
-  showEntry expr
-  result <- case expr of
+convertValue value = do
+  showEntry value
+  forcedValue <- forceValue value
+  result <- case forcedValue of
     VMeta {} -> resolutionError currentPass "VMeta"
     VFreeVar {} -> resolutionError currentPass "VFreeVar"
     VUniverse {} -> resolutionError currentPass "Universe"
@@ -225,8 +232,9 @@ convertValue expr = do
     VPi {} -> resolutionError currentPass "VPi"
     VLam binder closure -> do
       binder' <- convertBinder binder
-      closure' <- convertClosure convertExpr binder closure
-      return $ Lam binder' closure'
+      body <- extendClosureWithBound binder closure
+      body' <- addNameToContext binder $ convertValue body
+      return $ Lam binder' body'
     VBuiltin b spine -> convertBuiltin b spine
     VBoundVar v spine -> do
       name <- lvToProperName mempty v
@@ -238,21 +246,8 @@ convertValue expr = do
 convertBinder :: (MonadJSON m) => VBinder LossBuiltin -> m JBinder
 convertBinder binder = do
   let (name, p) = getNamedBinderInfo binder
-  typ' <- convertTypeValue (typeOf binder)
+  typ' <- convertTypeValue (Unforced $ typeOf binder)
   return $ Binder p name typ'
-
-convertClosure ::
-  (MonadJSON m) =>
-  (BoundEnv LossBuiltin -> S.Expr LossBuiltin -> m a) ->
-  VBinder LossBuiltin ->
-  Closure LossBuiltin ->
-  m a
-convertClosure f binder (Closure env body) = do
-  lv <- getBinderDepth
-  let newEnv = extendEnvWithBound lv binder env
-  addNameToContext binder $ do
-    debugFriendly body
-    f newEnv body
 
 convertBuiltin :: (MonadJSON m) => LossBuiltin -> Spine LossBuiltin -> m JExpr
 convertBuiltin b spine = case b of

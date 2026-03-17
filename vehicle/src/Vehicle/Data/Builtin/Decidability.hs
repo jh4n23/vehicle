@@ -6,15 +6,18 @@ where
 
 import Data.Hashable (Hashable)
 import GHC.Generics (Generic)
+import Vehicle.Compile.Normalise.Core
+import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Prelude (Expr (..), normAppList)
 import Vehicle.Data.Builtin.Core.BasicOperations
 import Vehicle.Data.Builtin.Core.Derived (DerivedFunction (..))
 import Vehicle.Data.Builtin.Interface
 import Vehicle.Data.Builtin.Interface.Normalise
 import Vehicle.Data.Builtin.Interface.Print
-import Vehicle.Data.Builtin.Standard (Builtin, BuiltinConstructor (..), BuiltinFunction (..), BuiltinType (..))
+import Vehicle.Data.Builtin.Standard (BuiltinConstructor (..), BuiltinFunction (..), BuiltinType (..))
 import Vehicle.Data.Code.DSL (tDim, tDims)
 import Vehicle.Data.Code.Interface
+import Vehicle.Data.Code.Value (ForcedValue (..), Value (..))
 import Vehicle.Data.DSL
 import Vehicle.Data.Tensor (BoolTensor, anyTensor)
 import Vehicle.Prelude (Pretty (..), Relevance (..), Visibility (..), developerError, explicit, (<+>))
@@ -127,6 +130,15 @@ functionAccessor b =
       mkExpr = \() -> StandardBuiltinFunction b
     }
 
+typeAccessor :: BuiltinType -> Accessor DecidabilityBuiltin ()
+typeAccessor b =
+  Access
+    { getExpr = \case
+        StandardBuiltinType b1 | b == b1 -> Just ()
+        _ -> Nothing,
+      mkExpr = \() -> StandardBuiltinType b
+    }
+
 instance BuiltinHasStandardTypes DecidabilityBuiltin where
   accessBuiltinType =
     Access
@@ -135,6 +147,9 @@ instance BuiltinHasStandardTypes DecidabilityBuiltin where
           StandardBuiltinType c -> Just c
           _ -> Nothing
       }
+
+instance BuiltinHasNatType DecidabilityBuiltin where
+  accessNatTypeBuiltin = typeAccessor NatType
 
 instance BuiltinHasVectors DecidabilityBuiltin where
   accessVecLitBuiltin =
@@ -146,6 +161,20 @@ instance BuiltinHasVectors DecidabilityBuiltin where
       }
 
   accessAtVectorBuiltin = functionAccessor AtVector
+
+instance BuiltinHasTensors DecidabilityBuiltin where
+  accessConstTensorBuiltin = functionAccessor ConstTensor
+  accessStackTensorBuiltin = functionAccessor StackTensor
+  accessAtTensorBuiltin = functionAccessor AtTensor
+
+instance BuiltinHasIndexLiterals DecidabilityBuiltin where
+  accessIndexLitBuiltin =
+    Access
+      { getExpr = \case
+          StandardBuiltinConstructor (IndexLiteral n) -> Just n
+          _ -> Nothing,
+        mkExpr = StandardBuiltinConstructor . IndexLiteral
+      }
 
 instance BuiltinHasStandardData DecidabilityBuiltin where
   accessBuiltinFunction =
@@ -262,7 +291,7 @@ instance Pretty DecidabilityBuiltin where
     DecidabilityBuiltinTypeClassOp t -> pretty t
     DecidabilityBuiltinFunction f -> pretty f
 
-instance ConvertableBuiltin DecidabilityBuiltin Builtin where
+instance PrintableBuiltin DecidabilityBuiltin where
   convertBuiltin p b = case b of
     StandardBuiltinType t -> convertBuiltin p t
     StandardBuiltinFunction f -> convertBuiltin p f
@@ -272,41 +301,36 @@ instance ConvertableBuiltin DecidabilityBuiltin Builtin where
     DecidabilityBuiltinTypeClassOp t -> cheatConvertBuiltin p (pretty t)
     DecidabilityBuiltinFunction f -> cheatConvertBuiltin p (pretty f)
 
-instance PrintableBuiltin DecidabilityBuiltin where
-  coercionArgs = const Nothing
-  isDerivedBuiltin = const Nothing
-
 --------------------------------------------------------------------------------
 -- Normalisation
 
 instance NormalisableBuiltin DecidabilityBuiltin where
   evaluationScheme = \case
-    StandardBuiltinFunction Iterate -> NonSimple evalIterate
-    StandardBuiltinFunction FoldList -> NonSimple evalFoldList
-    DecidabilityBuiltinTypeClassOp {} -> TypeClassEval
-    _ -> None
+    StandardBuiltinFunction Iterate -> StandardEvaluation evalIterate
+    StandardBuiltinFunction FoldList -> StandardEvaluation evalFoldList
+    DecidabilityBuiltinTypeClassOp {} -> TypeClassEvaluation
+    _ -> Unevaluable
 
-  blockingStatus b spine = case b of
-    StandardBuiltinFunction Iterate -> functionBlockingStatus Iterate spine
-    _ -> DoesNotReduce
+  isCast b = case b of
+    DecidabilityBuiltinFunction BoolTensorToProp -> True
+    DecidabilityBuiltinFunction BoolVectorToProp -> True
+    _ -> False
 
-  isCast p e = case e of
-    DecidabilityBuiltinFunction BoolTensorToProp -> Just $ forceEvalSimpleBuiltin p e evalBoolTensorToProp
-    DecidabilityBuiltinFunction BoolVectorToProp -> Just $ forceEvalSimpleBuiltin p e evalBoolVectorToProp
-    _ -> Nothing
+  isDerivedBuiltin = const Nothing
 
 evalBoolTensorToProp ::
-  (MonadNormBuiltin m, HasBuiltinConstructor expr) =>
-  TensorOp1Args (expr DecidabilityBuiltin) ->
-  m (expr DecidabilityBuiltin)
-evalBoolTensorToProp args = return $ case args of
-  TensorOp1Args _ (getExpr accessBuiltinC -> Just (StandardBuiltinConstructor (BoolTensorLiteral t), [])) -> do
-    let op = if anyTensor not t then PropFalse else PropTrue
-    mkExpr accessBuiltinC (DecidabilityBuiltinFunction op, [])
-  _ -> developerError $ "Should not be possible to have non-literal" <+> pretty BoolTensorToProp <+> "args"
+  (MonadNorm DecidabilityBuiltin m) =>
+  BuiltinEvaluation TensorOp1Args DecidabilityBuiltin m
+evalBoolTensorToProp (TensorOp1Args _ x) = do
+  fx <- forceValue x
+  case fx of
+    VBuiltin (StandardBuiltinConstructor (BoolTensorLiteral t)) [] -> do
+      let op = if anyTensor not t then PropFalse else PropTrue
+      return $ Evaluated $ Forced $ mkExpr accessBuiltinC (DecidabilityBuiltinFunction op, [])
+    _ -> developerError $ "Should not be possible to have non-literal" <+> pretty BoolTensorToProp <+> "args"
 
 evalBoolVectorToProp ::
-  (MonadNormBuiltin m) =>
+  (MonadNorm DecidabilityBuiltin m) =>
   VectorOp1Args (Expr DecidabilityBuiltin) ->
   m (Expr DecidabilityBuiltin)
 evalBoolVectorToProp args = return $ case args of

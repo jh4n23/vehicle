@@ -10,6 +10,7 @@ import GHC.Generics (Generic)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Type.Meta.Set (MetaSet)
 import Vehicle.Compile.Type.Meta.Set qualified as MetaSet
+import Vehicle.Data.Code.Value
 import Vehicle.Data.Variable.Bound.Context.Generic.Core
 
 --------------------------------------------------------------------------------
@@ -103,9 +104,9 @@ contextDBLevel = boundCtxLv . boundContext
 data ArgInsertionProblem builtin = ArgInsertionProblem
   { originalFun :: Expr builtin,
     originalArgs :: [Arg builtin],
-    originalType :: Type builtin,
+    originalFunType :: Type builtin,
     checkedArgs :: [Arg builtin],
-    currentExpectedType :: Type builtin,
+    currentExpectedType :: VType builtin,
     uncheckedArgs :: [Arg builtin],
     contextRelevance :: Relevance
   }
@@ -154,15 +155,15 @@ type InstanceHead builtin = Either Identifier builtin
 data InstanceGoal builtin = InstanceGoal
   { goalTelescope :: Telescope builtin,
     goalHead :: InstanceHead builtin,
-    goalSpine :: Args builtin
+    goalSpine :: Spine builtin
   }
   deriving (Show)
 
-goalExpr :: InstanceGoal builtin -> Expr builtin
-goalExpr InstanceGoal {..} =
+forcedGoalValue :: InstanceGoal builtin -> ForcedValue builtin
+forcedGoalValue InstanceGoal {..} =
   case goalHead of
-    Left ident -> normAppList (FreeVar mempty ident) goalSpine
-    Right builtin -> normAppList (Builtin mempty builtin) goalSpine
+    Left ident -> VFreeVar ident goalSpine
+    Right builtin -> VBuiltin builtin goalSpine
 
 data InstanceCandidate builtin = InstanceCandidate
   { candidateExpr :: Expr builtin,
@@ -262,8 +263,8 @@ data UnificationConstraintOrigin builtin
 data UnificationConstraint builtin
   = Unify
       (UnificationConstraintOrigin builtin)
-      (Expr builtin)
-      (Expr builtin)
+      (Value builtin)
+      (Value builtin)
   deriving (Show)
 
 type instance

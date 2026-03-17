@@ -3,7 +3,6 @@ module Vehicle.Compile.Type.Bidirectional
     checkTelescope,
     checkRecordDefinition,
     inferExprType,
-    solveArgInsertionProblem,
     createFreshUnificationConstraint,
   )
 where
@@ -14,20 +13,21 @@ import Data.Data (Proxy (..))
 import Data.List.NonEmpty qualified as NonEmpty (toList)
 import Data.Maybe (fromMaybe)
 import Vehicle.Compile.Error
+import Vehicle.Compile.Normalise.Quote
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
+import Vehicle.Compile.Type.Constraint.ApplicationSolver
 import Vehicle.Compile.Type.Constraint.UnificationSolver (solveUnificationConstraint)
 import Vehicle.Compile.Type.Core
-import Vehicle.Compile.Type.Force (forceHead, unforce)
-import Vehicle.Compile.Type.Meta (MetaSet)
-import Vehicle.Compile.Type.Meta.Set qualified as MetaSet
 import Vehicle.Compile.Type.Monad
-import Vehicle.Compile.Type.Monad.Class (createFreshConstraintCtx, getDeclType, getRecordDefinition)
+import Vehicle.Compile.Type.Monad.Class (createFreshConstraintCtx, getRecordDefinition)
 import Vehicle.Compile.Type.System (HasTypeSystem (..), TCM)
 import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin (..))
+import Vehicle.Data.Code.Value (Thunk (..), Value (..), boundContextToEnv, thunkifyExpr)
 import Vehicle.Data.Universe (UniverseLevel (..))
 import Vehicle.Data.Variable.Bound.Context.Generic
 import Vehicle.Data.Variable.Bound.Context.Name (MonadReadableNameContext (..))
+import Vehicle.Data.Variable.Free.Context
 import Prelude hiding (pi)
 
 --------------------------------------------------------------------------------
@@ -221,8 +221,8 @@ inferExpr e = do
           let liftedCheckedType = liftDBIndices (Lv $ unIx i + 1) (typeOf binder)
           return (BoundVar p i, liftedCheckedType)
     FreeVar p ident -> do
-      originalType <- getDeclType (Proxy @builtin) ident
-      return (FreeVar p ident, originalType)
+      originalFunType <- getDeclType (Proxy @builtin) ident
+      return (FreeVar p ident, originalFunType)
     Let p boundExpr binder body -> do
       checkedBinder <- checkBinder binder
 
@@ -274,10 +274,6 @@ checkRecordTypeAndCalculateRecordFieldTypes p uncheckedRecordType = do
           <> lineIndent (prettyVerbose checkedRecordType)
 
   (telescope, fields) <- getRecordDefinition (Proxy @builtin) recordIdent
-  ctx <- getNameContext
-  logDebug MaxDetail $ pretty ctx
-  logDebug MaxDetail $ prettyVerbose recordParameters
-  logDebug MaxDetail $ prettyVerbose fields
   let substField fieldType = calculateRarameterisedRecordFieldType telescope fieldType recordParameters
   let finalFields = mapRecordFields substField fields
 
@@ -321,20 +317,28 @@ inferApp ::
 inferApp fun funType args = do
   relevance <- getCurrentRelevance (Proxy @builtin)
   ctx <- getBoundCtx (Proxy @(Type builtin))
+  let normFunType = Unforced $ Thunk (boundContextToEnv ctx) funType
   let insertionProblem =
         ArgInsertionProblem
           { originalFun = fun,
             originalArgs = args,
-            originalType = funType,
+            originalFunType = funType,
             checkedArgs = mempty,
-            currentExpectedType = funType,
             uncheckedArgs = args,
+            currentExpectedType = normFunType,
             contextRelevance = relevance
           }
-  result <- solveArgInsertionProblem ctx insertionProblem
+
+  -- Try solving the problem immediately
+  result <- solveArgInsertionProblem checkExprType ctx insertionProblem
   case result of
-    Left (problem, blockingMetas) -> createFreshApplicationConstraint ctx problem blockingMetas
-    Right r -> return r
+    -- If succeeds then great
+    Right (resultExpr, normResultType) -> do
+      let resultType = unnormalise (boundCtxLv ctx) normResultType
+      return (resultExpr, resultType)
+    -- Otherwise add the blocked problem as a constraint
+    Left (problem, blockingMetas) ->
+      createFreshApplicationConstraint ctx problem blockingMetas
 
 -------------------------------------------------------------------------------
 -- Utility functions
@@ -399,152 +403,13 @@ createFreshUnificationConstraint ::
   Type builtin ->
   m ()
 createFreshUnificationConstraint p ctx origin expectedType actualType = do
+  let env = boundContextToEnv ctx
   context <- createFreshConstraintCtx p ctx
-  let unification = Unify origin expectedType actualType
+  let unification = Unify origin (thunkifyExpr env expectedType) (thunkifyExpr env actualType)
   solveUnificationConstraint (WithContext unification context)
 
 getCurrentRelevance :: (MonadBidirectional builtin m) => Proxy builtin -> m Relevance
 getCurrentRelevance _ = ask
-
--------------------------------------------------------------------------------
--- Arg insertion problem
-
-type ArgInsertionProblemSolution builtin =
-  Either (ArgInsertionProblem builtin, MetaSet) (Expr builtin, Type builtin)
-
--- | Deals with insertion of missing implicits and instance arguments
-solveArgInsertionProblem ::
-  (TCM builtin m) =>
-  BoundCtx (Type builtin) ->
-  ArgInsertionProblem builtin ->
-  m (ArgInsertionProblemSolution builtin)
-solveArgInsertionProblem ctx problem@ArgInsertionProblem {..} = do
-  -- First see if the unnormalised type is correct. Don't pre-emptively normalise as we want to keep as much
-  -- type information as we can.
-  case currentExpectedType of
-    -- If a standard Pi type then proceed to check against it (need to do this first before we check if args
-    -- are null, as it may be a non-explicit binder for which we do need to insert arguments even if the user
-    -- hasn't provided any)
-    Pi _ binder resultType -> checkArgsAgainstPiType ctx problem binder resultType
-    -- Otherwise if there are no unchecked arguments we have nothing to do.
-    _
-      | null uncheckedArgs -> argInsertionProblemSolved problem
-      | otherwise -> do
-          -- Force the current expected type to normalise
-          (forcedExpectedType, blockingMetas) <- forceApplicationHeadType ctx currentExpectedType
-          logDebug MaxDetail ("normalising type to" <+> prettyExternal (WithContext forcedExpectedType (toNamedBoundCtx ctx)))
-          case forcedExpectedType of
-            -- If the forced expression is a `Pi` then well we've lost the user's types but we can proceed
-            Pi _ binder resultType -> checkArgsAgainstPiType ctx problem binder resultType
-            -- Otherwise if we are blocked on metas then we can postpone the problem until these metas are solved
-            _
-              | not (MetaSet.null blockingMetas) -> do
-                  let newProblem = ArgInsertionProblem {currentExpectedType = forcedExpectedType, ..}
-                  return $ Left (newProblem, blockingMetas)
-              -- Otherwise we're truely stuck and we error.
-              | otherwise -> do
-                  let boundCtx = toNamedBoundCtx ctx
-                  throwError $ TypingError $ FunctionTypeMismatch $ FunctionTypeMismatchError boundCtx originalFun currentExpectedType uncheckedArgs
-
-forceApplicationHeadType ::
-  (MonadTypeChecker builtin m) =>
-  BoundCtx (Type builtin) ->
-  Type builtin ->
-  m (Type builtin, MetaSet)
-forceApplicationHeadType ctx typ = do
-  (forcedType, blockingMetas) <- forceHead (toNamedBoundCtx ctx) typ
-  return (unforce forcedType, blockingMetas)
-
-checkArgsAgainstPiType ::
-  (TCM builtin m) =>
-  BoundCtx (Type builtin) ->
-  ArgInsertionProblem builtin ->
-  Binder builtin ->
-  Type builtin ->
-  m (ArgInsertionProblemSolution builtin)
-checkArgsAgainstPiType ctx problem@ArgInsertionProblem {..} binder resultType
-  | isExplicit binder && null uncheckedArgs = argInsertionProblemSolved problem
-  | otherwise = do
-      let nameCtx = toNamedBoundCtx ctx
-
-      let checkedExprDoc = prettyExternal (WithContext (solutionSoFar problem) nameCtx)
-      let uncheckedArgsDoc = prettyExternal (WithContext uncheckedArgs nameCtx)
-      logDebug MaxDetail $ "checking-args-enter" <+> checkedExprDoc <+> "@" <+> uncheckedArgsDoc
-      incrCallDepth
-      logDebug MaxDetail $ "expected-type:" <+> prettyExternal (WithContext currentExpectedType nameCtx)
-
-      -- Determine whether we have an arg that matches the binder
-      let visibility = visibilityOf binder
-      (matchedUncheckedArg, remainingUncheckedArgs) <- case uncheckedArgs of
-        [] -> return (Nothing, uncheckedArgs)
-        (arg : remainingArgs)
-          | visibilityOf arg == visibility -> return (Just arg, remainingArgs)
-          | isExplicit binder -> throwError $ TypingError $ MissingExplicitArg $ MissingExplicitArgError (toNamedBoundCtx ctx) binder arg
-          | otherwise -> return (Nothing, uncheckedArgs)
-
-      -- Calculate what the new checked arg should be, create a fresh meta
-      -- if no arg was matched above
-      let p = provenanceOf originalFun
-      checkedArg <- case matchedUncheckedArg of
-        Just arg -> do
-          logDebug MaxDetail $ "matching-arg-found" <+> prettyVerbose arg
-          let relevance = relevanceOf binder
-          let ctxRelevance = if contextRelevance == Irrelevant then Irrelevant else relevance
-          checkedArgExpr <- checkExprType ctx ctxRelevance (typeOf binder) (argExpr arg)
-          return $ Arg (visibilityOf arg) relevance checkedArgExpr
-        Nothing -> do
-          logDebug MaxDetail "no-matching-arg-found"
-          let original = (originalFun, originalArgs, originalType)
-          instantiateArgForNonExplicitBinder ctx p original binder
-
-      let newCheckedArgs = checkedArg : checkedArgs
-      let newExpectedType = argExpr checkedArg `substDBInto` resultType
-      let newProblem =
-            problem
-              { checkedArgs = newCheckedArgs,
-                currentExpectedType = newExpectedType,
-                uncheckedArgs = remainingUncheckedArgs
-              }
-
-      logDebug MaxDetail $ "new-expected-type:" <+> prettyExternal (WithContext newExpectedType nameCtx)
-      decrCallDepth
-      let newCheckedExprDoc = prettyExternal (WithContext (solutionSoFar newProblem) nameCtx)
-      let newUncheckedArgsDoc = prettyExternal (WithContext remainingUncheckedArgs nameCtx)
-      logDebug MaxDetail $ "checking-args-exit" <+> newCheckedExprDoc <+> "@" <+> newUncheckedArgsDoc
-
-      -- Recurse to check the remaining unchecked args
-      solveArgInsertionProblem ctx newProblem
-
-argInsertionProblemSolved ::
-  (MonadTypeChecker builtin m) =>
-  ArgInsertionProblem builtin ->
-  m (ArgInsertionProblemSolution builtin)
-argInsertionProblemSolved problem@ArgInsertionProblem {..} =
-  return $ Right (solutionSoFar problem, currentExpectedType)
-
-instantiateArgForNonExplicitBinder ::
-  (TCM builtin m) =>
-  BoundCtx (Type builtin) ->
-  Provenance ->
-  (Expr builtin, [Arg builtin], Type builtin) ->
-  Binder builtin ->
-  m (Arg builtin)
-instantiateArgForNonExplicitBinder boundCtx p (fun, funArgs, funType) binder = do
-  let binderType = typeOf binder
-  checkedExpr <- case visibilityOf binder of
-    Explicit {} -> compilerDeveloperError "Should not be instantiating Arg for explicit Binder"
-    Implicit {} -> freshMetaExpr p binderType boundCtx
-    Instance {} -> do
-      let origin =
-            InstanceArgOrigin $
-              ArgOrigin
-                { checkedInstanceOp = fun,
-                  checkedInstanceOpArgs = funArgs,
-                  checkedInstanceOpType = funType,
-                  checkedInstanceType = binderType
-                }
-      createFreshInstanceConstraint (isAuxiliaryConstraint binderType) boundCtx (provenanceOf fun) origin (relevanceOf binder) binderType
-  return $ Arg (markInserted $ visibilityOf binder) (relevanceOf binder) checkedExpr
 
 --------------------------------------------------------------------------------
 -- Debug functions
@@ -552,7 +417,7 @@ instantiateArgForNonExplicitBinder boundCtx p (fun, funArgs, funType) binder = d
 showCheckEntry :: forall builtin m. (MonadBidirectional builtin m) => Type builtin -> Expr builtin -> m ()
 showCheckEntry t e = do
   ctx <- getNameContext
-  logDebug MaxDetail $ "check-entry" <+> prettyExternal (WithContext e ctx) <+> ":" <+> prettyExternal (WithContext t ctx) -- <+> "::::" <+> pretty (length ctx)
+  logDebug MaxDetail $ "check-entry" <+> prettyExternal (WithContext e ctx) <+> ":" <+> prettyExternal (WithContext t ctx)
   incrCallDepth
 
 showCheckExit :: forall builtin m. (MonadBidirectional builtin m) => Expr builtin -> m ()

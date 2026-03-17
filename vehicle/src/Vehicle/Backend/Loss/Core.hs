@@ -36,7 +36,7 @@ runMonadLogicT ::
   (MonadCompile m) =>
   DifferentiableLogicID ->
   DifferentiableLogicImplementation ->
-  VDecl Builtin ->
+  Decl Builtin ->
   TensorBoundContextT (ReaderT LossCtx m) a ->
   m a
 runMonadLogicT logicID logic decl action = do

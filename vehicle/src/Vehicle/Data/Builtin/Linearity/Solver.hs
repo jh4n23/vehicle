@@ -6,44 +6,41 @@ where
 import Data.Maybe (mapMaybe)
 import Vehicle.Compile.Error
 import Vehicle.Compile.Prelude
-import Vehicle.Compile.Print (prettyFriendly)
 import Vehicle.Compile.Type.Constraint.Core
 import Vehicle.Compile.Type.Core
-import Vehicle.Compile.Type.Force (ForcedExpr (..), forceHead)
-import Vehicle.Compile.Type.Monad (MonadTypeChecker)
-import Vehicle.Compile.Type.Monad.Class (substMetaVariables)
+import Vehicle.Compile.Type.Monad (MonadTypeChecker, deepForceValue)
 import Vehicle.Compile.Type.System
 import Vehicle.Data.Builtin.Core
 import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin)
 import Vehicle.Data.Builtin.Linearity
 import Vehicle.Data.Code.Value
-import Vehicle.Data.Variable.Bound.Context.Generic.Core
+import Vehicle.Data.Variable.Bound.Context.Generic.Core (namedBoundCtxOf)
+import Vehicle.Data.Variable.Bound.Context.Name (MonadReadableNameContext, extendClosureWithBound, runNameBoundContextT)
 
 solveLinearityConstraint ::
-  (MonadLinearitySolver m) =>
+  (MonadTypeChecker LinearityBuiltin m, TypableBuiltin LinearityBuiltin) =>
   WithContext (InstanceConstraint LinearityBuiltin) ->
   m ()
-solveLinearityConstraint constraintWithCtx = do
-  substConstraintWithCtx@(WithContext normConstraint@(Resolve origin _ _ _ goal) ctx) <- substMetaVariables @LinearityBuiltin constraintWithCtx
-  logDebug MaxDetail $ "Forced:" <+> prettyFriendly substConstraintWithCtx
-
+solveLinearityConstraint (WithContext normConstraint@(Resolve origin _ _ _ goal) ctx) = do
   (tc, spine) <- getTypeClass goal
   let nConstraint = WithContext normConstraint ctx
-  let maybeProgress = solve tc (ctx, origin) (mapMaybe getExplicitArg spine)
-  case maybeProgress of
-    Nothing -> malformedConstraintError nConstraint
-    Just progress -> do
-      let solution = VBuiltin (LinearityConstructor UnitLiteral) []
-      handleAuxiliaryConstraintProgress solution nConstraint =<< progress
+  progress <-
+    runNameBoundContextT (namedBoundCtxOf ctx) $
+      solve tc (ctx, origin) (mapMaybe getExplicitArg spine)
+  let solution = VBuiltin (LinearityConstructor UnitLiteral) []
+  handleAuxiliaryConstraintProgress solution nConstraint progress
 
 --------------------------------------------------------------------------------
 -- Constraint solving
 
-pattern FLinearityExpr :: Linearity -> ForcedExpr LinearityBuiltin
-pattern FLinearityExpr l <- FBuiltin _ (Linearity l) []
+pattern FLinearityExpr :: Linearity -> ForcedValue LinearityBuiltin
+pattern FLinearityExpr l <- VBuiltin (Linearity l) []
+  where
+    FLinearityExpr l = VBuiltin (Linearity l) []
 
 type MonadLinearitySolver m =
   ( MonadTypeChecker LinearityBuiltin m,
+    MonadReadableNameContext m,
     TypableBuiltin LinearityBuiltin
   )
 
@@ -51,8 +48,8 @@ type LinearitySolver =
   forall m.
   (MonadLinearitySolver m) =>
   InstanceConstraintInfo LinearityBuiltin ->
-  [Type LinearityBuiltin] ->
-  Maybe (m (AuxiliaryConstraintProgress LinearityBuiltin))
+  [VType LinearityBuiltin] ->
+  m (AuxiliaryConstraintProgress LinearityBuiltin)
 
 solve :: LinearityRelation -> LinearitySolver
 solve = \case
@@ -64,30 +61,31 @@ solve = \case
   QuantifierLinearity q -> solveQuantifierLinearity q
 
 solveQuantifierLinearity :: Quantifier -> LinearitySolver
-solveQuantifierLinearity _ info@(ctx, _) [fn, res] = Just $ do
-  (forcedFn, blockingMetas) <- forceHead (namedBoundCtxOf ctx) fn
+solveQuantifierLinearity _ info [fn, res] = do
+  (forcedFn, blockingMetas) <- deepForceValue fn
   case forcedFn of
-    FPi _ binder body -> do
+    VPi binder body -> do
       let (varName, p) = getNamedBinderInfo binder
-      let domainLin = Builtin p $ Linearity $ Linear (QuantifiedVariableProvenance p varName)
-      domEq <- createInstanceUnification info (typeOf binder) domainLin
-      resEq <- createInstanceUnification info res body
+      let domainLin = Forced $ FLinearityExpr $ Linear (QuantifiedVariableProvenance p varName)
+      closedBody <- extendClosureWithBound binder body
+      domEq <- createInstanceUnification info (Unforced $ typeOf binder) domainLin
+      resEq <- createInstanceUnification info res closedBody
       return $ Progress [domEq, resEq] []
     _ -> return $ Stuck blockingMetas
-solveQuantifierLinearity _ _ _ = Nothing
+solveQuantifierLinearity _ _ _ = developerError "Malformed QuantifierLinearity"
 
 solveOp2Linearity ::
   Bool ->
   Bool ->
   (Linearity -> Linearity -> Linearity) ->
   LinearitySolver
-solveOp2Linearity shortCircuitLHS shortCircuitRHS combine info@(ctx, _) [lin1, lin2, res] =
-  Just $ do
-    (flin1, blockingMetas1) <- forceHead (namedBoundCtxOf ctx) lin1
-    (flin2, blockingMetas2) <- forceHead (namedBoundCtxOf ctx) lin2
+solveOp2Linearity shortCircuitLHS shortCircuitRHS combine info [lin1, lin2, res] =
+  do
+    (flin1, blockingMetas1) <- deepForceValue lin1
+    (flin2, blockingMetas2) <- deepForceValue lin2
     case (flin1, flin2) of
       (FLinearityExpr l1, FLinearityExpr l2) -> do
-        let linRes = Builtin mempty $ Linearity $ combine l1 l2
+        let linRes = Forced $ FLinearityExpr (combine l1 l2)
         resEq <- createInstanceUnification info res linRes
         return $ Progress [resEq] []
       (FLinearityExpr Constant, _)
@@ -102,13 +100,13 @@ solveOp2Linearity shortCircuitLHS shortCircuitRHS combine info@(ctx, _) [lin1, l
 solveOp2Linearity _ _ _ _ _ = developerError "Malformed Op2Linearity"
 
 solveFunctionLinearity :: FunctionPosition -> LinearitySolver
-solveFunctionLinearity functionPosition info@(ctx, _) [arg, res] = Just $ do
-  (forcedArg, blockingMetas) <- forceHead (namedBoundCtxOf ctx) arg
+solveFunctionLinearity functionPosition info@(ctx, _) [arg, res] = do
+  (forcedArg, blockingMetas) <- deepForceValue arg
   case forcedArg of
     FLinearityExpr lin -> do
       let p = provenanceOf ctx
       let addFuncProv pp = LinFunctionProvenance p pp functionPosition
-      let resLin = Builtin p $ Linearity $ mapLinearityProvenance addFuncProv lin
+      let resLin = Forced $ FLinearityExpr $ mapLinearityProvenance addFuncProv lin
       resEq <- createInstanceUnification info res resLin
       return $ Progress [resEq] []
     _ -> return $ Stuck blockingMetas
@@ -151,7 +149,7 @@ powLinearityOp p l1 l2 = case (l1, l2) of
 --------------------------------------------------------------------------------
 -- Other
 
-getTypeClass :: (MonadCompile m) => InstanceGoal LinearityBuiltin -> m (LinearityRelation, Args LinearityBuiltin)
+getTypeClass :: (MonadCompile m) => InstanceGoal LinearityBuiltin -> m (LinearityRelation, Spine LinearityBuiltin)
 getTypeClass = \case
   (InstanceGoal [] (Right (LinearityRelation tc)) args) -> return (tc, args)
   _ -> compilerDeveloperError "Unexpected non-type-class instance argument found."

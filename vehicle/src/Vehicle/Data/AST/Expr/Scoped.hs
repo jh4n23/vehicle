@@ -395,7 +395,7 @@ getLastArgLambda = \case
       _ -> Nothing
   _ -> Nothing
 
-instance HasBuiltinConstructor Expr where
+instance HasBuiltinConstructor Expr Expr where
   accessBuiltinC =
     Access
       { getExpr = getBuiltinApp,

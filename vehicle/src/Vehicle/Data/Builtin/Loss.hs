@@ -5,14 +5,14 @@ module Vehicle.Data.Builtin.Loss
 where
 
 import GHC.Generics (Generic)
+import Vehicle.Compile.Normalise.Core
 import Vehicle.Data.Builtin.Core.BasicOperations
 import Vehicle.Data.Builtin.Interface
 import Vehicle.Data.Builtin.Interface.Normalise
 import Vehicle.Data.Builtin.Interface.Print
-import Vehicle.Data.Builtin.Standard.Core (Builtin)
 import Vehicle.Data.Builtin.Standard.Core qualified as S
 import Vehicle.Data.Code.Interface
-import Vehicle.Data.Code.Value (Value)
+import Vehicle.Data.Code.Value (Value (..))
 import Vehicle.Data.Tensor (Tensor)
 import Vehicle.Prelude (Name, Pretty (..), developerError)
 
@@ -268,57 +268,59 @@ instance BuiltinHasForeach LossBuiltin where
 --------------------------------------------------------------------------------
 -- Normalisation
 
-instance (HasBuiltinConstructor expr) => HasTensorLiterals expr LossBuiltin where
+instance HasTensorLiterals LossBuiltin where
   tensorLiterals =
     [ Wrapper accessNatTensorLiteral,
       Wrapper accessRatTensorLiteral
     ]
 
-instance (HasBuiltinConstructor expr) => HasLiftableTensorOperations expr LossBuiltin where
+instance HasLiftableTensorOperations LossBuiltin where
   liftableTensorOp1s =
-    [ (accessNegRatTensor, evalNegRatTensor, IRatType)
+    [ (accessNegRatTensor, accessNegRatTensorBuiltin, Forced IRatType)
     ]
 
   liftableTensorOp2s =
-    [ (accessAddRatTensor, evalAddRatTensor, IRatType),
-      (accessMulRatTensor, evalMulRatTensor, IRatType),
-      (accessSubRatTensor, evalSubRatTensor, IRatType),
-      (accessDivRatTensor, evalDivRatTensor, IRatType),
-      (accessMinRatTensor, evalMinRatTensor, IRatType),
-      (accessMaxRatTensor, evalMaxRatTensor, IRatType)
+    [ (accessAddRatTensor, accessAddRatTensorBuiltin, Forced IRatType),
+      (accessMulRatTensor, accessMulRatTensorBuiltin, Forced IRatType),
+      (accessSubRatTensor, accessSubRatTensorBuiltin, Forced IRatType),
+      (accessDivRatTensor, accessDivRatTensorBuiltin, Forced IRatType),
+      (accessMinRatTensor, accessMinRatTensorBuiltin, Forced IRatType),
+      (accessMaxRatTensor, accessMaxRatTensorBuiltin, Forced IRatType)
     ]
 
-instance NormalisableBuiltin Value LossBuiltin where
-  evaluationScheme b spine = case b of
+instance NormalisableBuiltin LossBuiltin where
+  evaluationScheme b = case b of
     LossBuiltinFunction f -> case f of
-      Add AddNat -> Simple evalAddNat
-      Mul MulNat -> Simple evalMulNat
-      Neg NegRatTensor -> Simple evalNegRatTensor
-      Add AddRatTensor -> Simple evalAddRatTensor
-      Sub SubRatTensor -> Simple evalSubRatTensor
-      Mul MulRatTensor -> Simple evalMulRatTensor
-      Div DivRatTensor -> Simple evalDivRatTensor
-      Min MinRatTensor -> Simple evalMinRatTensor
-      Max MaxRatTensor -> Simple evalMaxRatTensor
-      PowRat -> Simple evalPowRat
-      ReduceAddRatTensor -> Simple evalReduceAddRatTensor
-      ReduceMulRatTensor -> Simple evalReduceMulRatTensor
-      ReduceMinRatTensor -> Simple evalReduceMinRatTensor
-      ReduceMaxRatTensor -> Simple evalReduceMaxRatTensor
-      At -> NonSimple evalAtTensor
-      StackTensor -> Simple evalStackTensor
-      ConstTensor -> Simple evalConstTensor
-      FoldList -> NonSimple evalFoldList
-      MapList -> NonSimple evalMapList
+      Add AddNat -> StandardEvaluation evalAddNat
+      Mul MulNat -> StandardEvaluation evalMulNat
+      Neg NegRatTensor -> StandardEvaluation evalNegRatTensor
+      Add AddRatTensor -> StandardEvaluation evalAddRatTensor
+      Sub SubRatTensor -> StandardEvaluation evalSubRatTensor
+      Mul MulRatTensor -> StandardEvaluation evalMulRatTensor
+      Div DivRatTensor -> StandardEvaluation evalDivRatTensor
+      Min MinRatTensor -> StandardEvaluation evalMinRatTensor
+      Max MaxRatTensor -> StandardEvaluation evalMaxRatTensor
+      PowRat -> StandardEvaluation evalPowRat
+      ReduceAddRatTensor -> StandardEvaluation evalReduceAddRatTensor
+      ReduceMulRatTensor -> StandardEvaluation evalReduceMulRatTensor
+      ReduceMinRatTensor -> StandardEvaluation evalReduceMinRatTensor
+      ReduceMaxRatTensor -> StandardEvaluation evalReduceMaxRatTensor
+      At -> StandardEvaluation evalAtTensor
+      StackTensor -> StandardEvaluation evalStackTensor
+      ConstTensor -> StandardEvaluation evalConstTensor
+      FoldList -> StandardEvaluation evalFoldList
+      MapList -> StandardEvaluation evalMapList
       SearchRatTensor {} -> Unevaluable
     _ -> Unevaluable
 
-  isCast _ _ = Nothing
+  isCast _ = False
+
+  isDerivedBuiltin = const Nothing
 
 --------------------------------------------------------------------------------
 -- Printing
 
-instance ConvertableBuiltin LossBuiltinType Builtin where
+instance PrintableBuiltin LossBuiltinType where
   convertBuiltin p =
     convertBuiltin p . \case
       UnitType -> S.UnitType
@@ -328,7 +330,7 @@ instance ConvertableBuiltin LossBuiltinType Builtin where
       ListType -> S.ListType
       TensorType -> S.TensorType
 
-instance ConvertableBuiltin LossBuiltinConstructor Builtin where
+instance PrintableBuiltin LossBuiltinConstructor where
   convertBuiltin p =
     convertBuiltin p . \case
       Nil -> S.Nil
@@ -339,7 +341,7 @@ instance ConvertableBuiltin LossBuiltinConstructor Builtin where
       NatTensorLiteral x -> S.NatTensorLiteral x
       RatTensorLiteral x -> S.RatTensorLiteral x
 
-instance ConvertableBuiltin LossBuiltinFunction Builtin where
+instance PrintableBuiltin LossBuiltinFunction where
   convertBuiltin p b = case b of
     Neg dom -> convertBuiltin p (S.Neg dom)
     Sub dom -> convertBuiltin p (S.Sub dom)
@@ -360,12 +362,8 @@ instance ConvertableBuiltin LossBuiltinFunction Builtin where
     FoldList -> convertBuiltin p S.FoldList
     SearchRatTensor {} -> cheatConvertBuiltin p $ pretty b
 
-instance ConvertableBuiltin LossBuiltin Builtin where
+instance PrintableBuiltin LossBuiltin where
   convertBuiltin p b = case b of
     LossBuiltinType op -> convertBuiltin p op
     LossBuiltinConstructor op -> convertBuiltin p op
     LossBuiltinFunction op -> convertBuiltin p op
-
-instance PrintableBuiltin LossBuiltin where
-  coercionArgs = const Nothing
-  isDerivedBuiltin = const Nothing

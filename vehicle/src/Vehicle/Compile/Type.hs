@@ -26,11 +26,9 @@ import Vehicle.Compile.Type.Meta.Set qualified as MetaSet
 import Vehicle.Compile.Type.Monad
 import Vehicle.Compile.Type.Monad.Class
 import Vehicle.Compile.Type.System (HasTypeSystem (..), TCM, runAuxiliarySolver)
-import Vehicle.Data.Builtin.Interface.Normalise (NormalisableBuiltin)
 import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin (..))
 import Vehicle.Data.Builtin.Standard
 import Vehicle.Data.Code.ModuleInterface
-import Vehicle.Data.Code.Value (FreeEnv)
 
 -------------------------------------------------------------------------------
 -- Interface
@@ -41,7 +39,7 @@ typeCheckModuleDecls ::
   InstanceDatabase builtin ->
   ImportedModuleContext builtin ->
   [Decl Builtin] ->
-  m ([Decl builtin], ModuleTypingInterface builtin, FreeEnv builtin)
+  m ([Decl builtin], ModuleTypingInterface builtin, FreeCtx builtin)
 typeCheckModuleDecls modulePath instances importedCtx decls = do
   logCompilerPass Typing $ do
     runTypeCheckerTInitially instances importedCtx $ do
@@ -251,7 +249,7 @@ solveConstraints proxy = logCompilerSection2 MidDetail "constraint solving" $ do
 
     runSolvers :: (TCM builtin m) => m ()
     runSolvers = do
-      runApplicationSolver proxy
+      runApplicationSolver checkExprType proxy
       runUnificationSolver proxy True
       runInstanceSolver proxy 0
       runAuxiliarySolver proxy
@@ -278,7 +276,7 @@ solveConstraints proxy = logCompilerSection2 MidDetail "constraint solving" $ do
 -------------------------------------------------------------------------------
 -- Unsolved constraint checks
 
-checkAllUnknownsSolved :: forall builtin m. (MonadTypeChecker builtin m, NormalisableBuiltin builtin) => Proxy builtin -> m ()
+checkAllUnknownsSolved :: forall builtin m. (MonadTypeChecker builtin m, TypableBuiltin builtin) => Proxy builtin -> m ()
 checkAllUnknownsSolved proxy = do
   -- First check all user constraints (i.e. unification and type-class
   -- constraints) are solved.
@@ -290,7 +288,7 @@ checkAllUnknownsSolved proxy = do
   -- ...and the fresh names
   clearFreshNames proxy
 
-checkAllMetasSolved :: forall builtin m. (MonadTypeChecker builtin m, Eq builtin, NormalisableBuiltin builtin) => Proxy builtin -> m ()
+checkAllMetasSolved :: forall builtin m. (MonadTypeChecker builtin m, TypableBuiltin builtin) => Proxy builtin -> m ()
 checkAllMetasSolved proxy = do
   unsolvedMetas <- getUnsolvedMetas proxy
   case MetaSet.toList unsolvedMetas of

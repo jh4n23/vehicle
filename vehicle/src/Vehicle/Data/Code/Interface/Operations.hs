@@ -10,22 +10,22 @@ import Vehicle.Prelude
 -- Interface to standard builtins
 --------------------------------------------------------------------------------
 
-class HasBuiltinConstructor expr where
-  accessBuiltinC :: Accessor (expr builtin) (builtin, [GenericArg (expr builtin)])
+class HasBuiltinConstructor expr arg | expr -> arg where
+  accessBuiltinC :: Accessor (expr builtin) (builtin, [GenericArg (arg builtin)])
 
 mkBuiltin ::
-  (HasBuiltinConstructor expr) =>
+  (HasBuiltinConstructor expr arg) =>
   Accessor builtin a ->
   a ->
-  [GenericArg (expr builtin)] ->
+  [GenericArg (arg builtin)] ->
   expr builtin
 mkBuiltin accessBuiltin v args = mkExpr accessBuiltinC (mkExpr accessBuiltin v, args)
 
 getBuiltin ::
-  (HasBuiltinConstructor expr) =>
+  (HasBuiltinConstructor expr arg) =>
   Accessor builtin a ->
   expr builtin ->
-  Maybe (a, [GenericArg (expr builtin)])
+  Maybe (a, [GenericArg (arg builtin)])
 getBuiltin accessBuiltin e = case getExpr accessBuiltinC e of
   Just (b, args) -> case getExpr accessBuiltin b of
     Just v -> Just (v, args)
@@ -37,7 +37,7 @@ getBuiltin accessBuiltin e = case getExpr accessBuiltinC e of
 --------------------------------------------------------------------------------
 
 accessNoArgs ::
-  (HasBuiltinConstructor expr) =>
+  (HasBuiltinConstructor expr arg) =>
   Accessor builtin a ->
   Accessor (expr builtin) a
 accessNoArgs access =
@@ -49,9 +49,9 @@ accessNoArgs access =
     }
 
 accessArgs ::
-  (HasBuiltinConstructor expr, IsArgs args) =>
+  (HasBuiltinConstructor expr arg, IsArgs args) =>
   Accessor builtin () ->
-  Accessor (expr builtin) (args (expr builtin))
+  Accessor (expr builtin) (args (arg builtin))
 accessArgs accessOp =
   Access
     { getExpr = \case
@@ -61,9 +61,9 @@ accessArgs accessOp =
     }
 
 accessOpAndArgs ::
-  (HasBuiltinConstructor expr, IsArgs args) =>
+  (HasBuiltinConstructor expr arg, IsArgs args) =>
   Accessor builtin op ->
-  Accessor (expr builtin) (op, args (expr builtin))
+  Accessor (expr builtin) (op, args (arg builtin))
 accessOpAndArgs accessOp =
   Access
     { getExpr = \case
@@ -73,10 +73,10 @@ accessOpAndArgs accessOp =
     }
 
 accessArgsForOp ::
-  (HasBuiltinConstructor expr, IsArgs args, Eq op) =>
-  Accessor (expr builtin) (op, args (expr builtin)) ->
+  (HasBuiltinConstructor expr arg, IsArgs args, Eq op) =>
+  Accessor (expr builtin) (op, args (arg builtin)) ->
   op ->
-  Accessor (expr builtin) (args (expr builtin))
+  Accessor (expr builtin) (args (arg builtin))
 accessArgsForOp accessor op =
   Access
     { getExpr = \case
@@ -89,260 +89,249 @@ accessArgsForOp accessor op =
 -- Types of accessors
 --------------------------------------------------------------------------------
 
-type NatComparisonAccessor expr op = Accessor expr (op, Op2Args expr)
+type NatComparisonAccessor expr arg op = Accessor expr (op, Op2Args arg)
 
-type IndexComparisonAccessor expr op = Accessor expr (op, IndexComparisonArgs expr)
+type IndexComparisonAccessor expr arg op = Accessor expr (op, IndexComparisonArgs arg)
 
-type RatTensorPointwiseComparisonAccessor expr op = Accessor expr (op, TensorOp2Args expr)
+type RatTensorPointwiseComparisonAccessor expr arg op = Accessor expr (op, TensorOp2Args arg)
 
-type RatTensorReducedComparisonAccessor expr op = Accessor expr (op, TensorReduceComparisonArgs expr)
+type RatTensorReducedComparisonAccessor expr arg op = Accessor expr (op, TensorReduceComparisonArgs arg)
 
-type Op1Accessor expr = Accessor expr (Op1Args expr)
+type Op1Accessor expr arg = Accessor expr (Op1Args arg)
 
-type Op2Accessor expr = Accessor expr (Op2Args expr)
+type Op2Accessor expr arg = Accessor expr (Op2Args arg)
 
-type TensorOp1Accessor expr = Accessor expr (TensorOp1Args expr)
+type TensorOp1Accessor expr arg = Accessor expr (TensorOp1Args arg)
 
-type TensorOp2Accessor expr = Accessor expr (TensorOp2Args expr)
+type TensorOp2Accessor expr arg = Accessor expr (TensorOp2Args arg)
 
-type TensorReductionAccessor expr = Accessor expr (TensorReductionArgs expr)
+type TensorReductionAccessor expr arg = Accessor expr (TensorReductionArgs arg)
 
 --------------------------------------------------------------------------------
 -- Accessors for operations
 --------------------------------------------------------------------------------
 -- Booleans
 
-type HasBoolType expr builtin =
-  ( HasTensorExpr expr builtin,
+type HasBoolType expr arg builtin =
+  ( HasTensorExpr expr arg builtin,
     BuiltinHasBoolType builtin
   )
 
-type HasBoolExpr expr builtin =
-  ( HasTensorExpr expr builtin,
+type HasBoolExpr expr arg builtin =
+  ( HasTensorExpr expr arg builtin,
     BuiltinHasBoolLiterals builtin
   )
 
-accessBoolType :: (HasBoolType expr builtin) => Accessor (expr builtin) ()
+accessBoolType :: (HasBoolType expr arg builtin) => Accessor (expr builtin) ()
 accessBoolType = accessNoArgs accessBoolTypeBuiltin
 
-accessBoolTensorLiteral :: (HasBoolExpr expr builtin) => Accessor (expr builtin) BoolTensor
+accessBoolTensorLiteral :: (BuiltinHasBoolLiterals builtin, HasBuiltinConstructor expr arg) => Accessor (expr builtin) BoolTensor
 accessBoolTensorLiteral = accessNoArgs accessBoolTensorLitBuiltin
 
-accessNotTensor :: (HasBoolExpr expr builtin) => TensorOp1Accessor (expr builtin)
-accessNotTensor = accessArgs accessNotBuiltin
+accessNotTensor :: (HasBoolExpr expr arg builtin) => TensorOp1Accessor (expr builtin) (arg builtin)
+accessNotTensor = accessArgs accessNotTensorBuiltin
 
-accessAndTensor :: (HasBoolExpr expr builtin) => TensorOp2Accessor (expr builtin)
-accessAndTensor = accessArgs accessAndBuiltin
+accessAndTensor :: (HasBoolExpr expr arg builtin) => TensorOp2Accessor (expr builtin) (arg builtin)
+accessAndTensor = accessArgs accessAndTensorBuiltin
 
-accessOrTensor :: (HasBoolExpr expr builtin) => TensorOp2Accessor (expr builtin)
-accessOrTensor = accessArgs accessOrBuiltin
+accessOrTensor :: (HasBoolExpr expr arg builtin) => TensorOp2Accessor (expr builtin) (arg builtin)
+accessOrTensor = accessArgs accessOrTensorBuiltin
 
-accessImpliesTensor :: (HasBoolExpr expr builtin) => TensorOp2Accessor (expr builtin)
-accessImpliesTensor = accessArgs accessImpliesBuiltin
+accessImpliesTensor :: (HasBoolExpr expr arg builtin) => TensorOp2Accessor (expr builtin) (arg builtin)
+accessImpliesTensor = accessArgs accessImpliesTensorBuiltin
 
-accessReduceAnd :: (HasBoolExpr expr builtin) => TensorReductionAccessor (expr builtin)
+accessReduceAnd :: (HasBoolExpr expr arg builtin) => TensorReductionAccessor (expr builtin) (arg builtin)
 accessReduceAnd = accessArgs accessReduceAndBuiltin
 
-accessReduceOr :: (HasBoolExpr expr builtin) => TensorReductionAccessor (expr builtin)
+accessReduceOr :: (HasBoolExpr expr arg builtin) => TensorReductionAccessor (expr builtin) (arg builtin)
 accessReduceOr = accessArgs accessReduceOrBuiltin
 
-accessIf :: (HasBoolExpr expr builtin) => Accessor (expr builtin) (IfArgs (expr builtin))
+accessIf :: (HasBoolExpr expr arg builtin) => Accessor (expr builtin) (IfArgs (arg builtin))
 accessIf = accessArgs accessIfBuiltin
 
-accessCompareIndex :: (HasBoolExpr expr builtin) => IndexComparisonAccessor (expr builtin) ComparisonOp
+accessCompareIndex :: (HasBoolExpr expr arg builtin) => IndexComparisonAccessor (expr builtin) (arg builtin) ComparisonOp
 accessCompareIndex = accessOpAndArgs accessCompareIndexBuiltin
 
-accessCompareNat :: (HasBoolExpr expr builtin) => NatComparisonAccessor (expr builtin) ComparisonOp
+accessCompareNat :: (HasBoolExpr expr arg builtin) => NatComparisonAccessor (expr builtin) (arg builtin) ComparisonOp
 accessCompareNat = accessOpAndArgs accessCompareNatBuiltin
 
-accessCompareRatTensorPointwise :: (HasBoolExpr expr builtin) => RatTensorPointwiseComparisonAccessor (expr builtin) ComparisonOp
+accessCompareRatTensorPointwise :: (HasBoolExpr expr arg builtin) => RatTensorPointwiseComparisonAccessor (expr builtin) (arg builtin) ComparisonOp
 accessCompareRatTensorPointwise = accessOpAndArgs accessCompareRatTensorPointwiseBuiltin
 
-accessCompareRatTensorReduced :: (HasBoolExpr expr builtin) => RatTensorReducedComparisonAccessor (expr builtin) ComparisonOp
+accessCompareRatTensorReduced :: (HasBoolExpr expr arg builtin) => RatTensorReducedComparisonAccessor (expr builtin) (arg builtin) ComparisonOp
 accessCompareRatTensorReduced = accessOpAndArgs accessCompareRatTensorReducedBuiltin
 
-accessQuantifyRatTensor ::
-  (HasBoolExpr expr builtin, HasLambdaConstructor expr body) =>
-  Accessor (expr builtin) (Quantifier, QuantifyRatTensorArgs (expr builtin) (body builtin))
-accessQuantifyRatTensor =
-  Access
-    { getExpr = \case
-        (getBuiltin accessQuantifyRatTensorBuiltin -> Just (q, spine)) ->
-          case getExpr accessQuantifyRatTensorSpine spine of
-            Just args -> Just (q, args)
-            _ -> Nothing
-        _ -> Nothing,
-      mkExpr = \(q, args) -> mkBuiltin accessQuantifyRatTensorBuiltin q (mkExpr accessQuantifyRatTensorSpine args)
-    }
+accessQuantifyRatTensor :: (HasBoolExpr expr arg builtin) => Accessor (expr builtin) (Quantifier, QuantifyRatTensorArgs (arg builtin))
+accessQuantifyRatTensor = accessOpAndArgs accessQuantifyRatTensorBuiltin
 
 --------------------------------------------------------------------------------
 -- Indices
 
-type HasIndexType expr builtin =
-  ( HasBuiltinConstructor expr,
+type HasIndexType expr arg builtin =
+  ( HasBuiltinConstructor expr arg,
     BuiltinHasIndexType builtin
   )
 
-type HasIndexExpr expr builtin =
-  ( HasBuiltinConstructor expr,
+type HasIndexExpr expr arg builtin =
+  ( HasBuiltinConstructor expr arg,
     BuiltinHasIndexLiterals builtin
   )
 
-accessIndexType :: (HasIndexType expr builtin) => Accessor (expr builtin) (IndexTypeArgs (expr builtin))
+accessIndexType :: (HasIndexType expr arg builtin) => Accessor (expr builtin) (IndexTypeArgs (arg builtin))
 accessIndexType = accessArgs accessIndexTypeBuiltin
 
-accessIndexLiteral :: (HasIndexExpr expr builtin) => Accessor (expr builtin) (Int, IndexLiteralArgs (expr builtin))
+accessIndexLiteral :: (HasIndexExpr expr arg builtin) => Accessor (expr builtin) (Int, IndexLiteralArgs (arg builtin))
 accessIndexLiteral = accessOpAndArgs accessIndexLitBuiltin
 
 --------------------------------------------------------------------------------
 -- Naturals
 
-type HasNatType expr builtin =
-  ( HasBuiltinConstructor expr,
+type HasNatType expr arg builtin =
+  ( HasBuiltinConstructor expr arg,
     BuiltinHasNatType builtin
   )
 
-type HasNatExpr expr builtin =
-  ( HasBuiltinConstructor expr,
+type HasNatExpr expr arg builtin =
+  ( HasBuiltinConstructor expr arg,
     BuiltinHasNatLiterals builtin
   )
 
-accessNatType :: (HasNatType expr builtin) => Accessor (expr builtin) ()
+accessNatType :: (HasNatType expr arg builtin) => Accessor (expr builtin) ()
 accessNatType = accessNoArgs accessNatTypeBuiltin
 
-accessNatLiteral :: (HasNatExpr expr builtin) => Accessor (expr builtin) Int
+accessNatLiteral :: (HasNatExpr expr arg builtin) => Accessor (expr builtin) Int
 accessNatLiteral = accessNoArgs accessNatLitBuiltin
 
-accessNatTensorLiteral :: (HasNatExpr expr builtin) => Accessor (expr builtin) NatTensor
+accessNatTensorLiteral :: (HasNatExpr expr arg builtin) => Accessor (expr builtin) NatTensor
 accessNatTensorLiteral = accessNoArgs accessNatTensorLitBuiltin
 
-accessAddNat :: (HasNatExpr expr builtin) => Op2Accessor (expr builtin)
+accessAddNat :: (HasNatExpr expr arg builtin) => Op2Accessor (expr builtin) (arg builtin)
 accessAddNat = accessArgs accessAddNatBuiltin
 
-accessMulNat :: (HasNatExpr expr builtin) => Op2Accessor (expr builtin)
+accessMulNat :: (HasNatExpr expr arg builtin) => Op2Accessor (expr builtin) (arg builtin)
 accessMulNat = accessArgs accessMulNatBuiltin
 
 --------------------------------------------------------------------------------
 -- Rationals
 
-type HasRatType expr builtin =
-  ( HasTensorExpr expr builtin,
+type HasRatType expr arg builtin =
+  ( HasTensorExpr expr arg builtin,
     BuiltinHasRatType builtin
   )
 
-type HasRatExpr expr builtin =
-  ( HasTensorExpr expr builtin,
+type HasRatExpr expr arg builtin =
+  ( HasTensorExpr expr arg builtin,
     BuiltinHasRatLiterals builtin
   )
 
-accessRatType :: (HasRatType expr builtin) => Accessor (expr builtin) ()
+accessRatType :: (HasRatType expr arg builtin) => Accessor (expr builtin) ()
 accessRatType = accessNoArgs accessRatTypeBuiltin
 
-accessRatTensorLiteral :: (HasRatExpr expr builtin) => Accessor (expr builtin) RatTensor
+accessRatTensorLiteral :: (HasRatExpr expr arg builtin) => Accessor (expr builtin) RatTensor
 accessRatTensorLiteral = accessNoArgs accessRatTensorLitBuiltin
 
-accessNegRatTensor :: (HasRatExpr expr builtin) => TensorOp1Accessor (expr builtin)
+accessNegRatTensor :: (HasRatExpr expr arg builtin) => TensorOp1Accessor (expr builtin) (arg builtin)
 accessNegRatTensor = accessArgs accessNegRatTensorBuiltin
 
-accessAddRatTensor :: (HasRatExpr expr builtin) => TensorOp2Accessor (expr builtin)
+accessAddRatTensor :: (HasRatExpr expr arg builtin) => TensorOp2Accessor (expr builtin) (arg builtin)
 accessAddRatTensor = accessArgs accessAddRatTensorBuiltin
 
-accessMulRatTensor :: (HasRatExpr expr builtin) => TensorOp2Accessor (expr builtin)
+accessMulRatTensor :: (HasRatExpr expr arg builtin) => TensorOp2Accessor (expr builtin) (arg builtin)
 accessMulRatTensor = accessArgs accessMulRatTensorBuiltin
 
-accessSubRatTensor :: (HasRatExpr expr builtin) => TensorOp2Accessor (expr builtin)
+accessSubRatTensor :: (HasRatExpr expr arg builtin) => TensorOp2Accessor (expr builtin) (arg builtin)
 accessSubRatTensor = accessArgs accessSubRatTensorBuiltin
 
-accessDivRatTensor :: (HasRatExpr expr builtin) => TensorOp2Accessor (expr builtin)
+accessDivRatTensor :: (HasRatExpr expr arg builtin) => TensorOp2Accessor (expr builtin) (arg builtin)
 accessDivRatTensor = accessArgs accessDivRatTensorBuiltin
 
-accessMinRatTensor :: (HasRatExpr expr builtin) => TensorOp2Accessor (expr builtin)
+accessMinRatTensor :: (HasRatExpr expr arg builtin) => TensorOp2Accessor (expr builtin) (arg builtin)
 accessMinRatTensor = accessArgs accessMinRatTensorBuiltin
 
-accessMaxRatTensor :: (HasRatExpr expr builtin) => TensorOp2Accessor (expr builtin)
+accessMaxRatTensor :: (HasRatExpr expr arg builtin) => TensorOp2Accessor (expr builtin) (arg builtin)
 accessMaxRatTensor = accessArgs accessMaxRatTensorBuiltin
 
-accessPowRatTensor :: (HasRatExpr expr builtin) => TensorOp2Accessor (expr builtin)
+accessPowRatTensor :: (HasRatExpr expr arg builtin) => TensorOp2Accessor (expr builtin) (arg builtin)
 accessPowRatTensor = accessArgs accessPowRatTensorBuiltin
 
-accessReduceAddRat :: (HasRatExpr expr builtin) => TensorReductionAccessor (expr builtin)
+accessReduceAddRat :: (HasRatExpr expr arg builtin) => TensorReductionAccessor (expr builtin) (arg builtin)
 accessReduceAddRat = accessArgs accessReduceAddRatBuiltin
 
-accessReduceMulRat :: (HasRatExpr expr builtin) => TensorReductionAccessor (expr builtin)
+accessReduceMulRat :: (HasRatExpr expr arg builtin) => TensorReductionAccessor (expr builtin) (arg builtin)
 accessReduceMulRat = accessArgs accessReduceMulRatBuiltin
 
-accessReduceMinRat :: (HasRatExpr expr builtin) => TensorReductionAccessor (expr builtin)
+accessReduceMinRat :: (HasRatExpr expr arg builtin) => TensorReductionAccessor (expr builtin) (arg builtin)
 accessReduceMinRat = accessArgs accessReduceMinRatBuiltin
 
-accessReduceMaxRat :: (HasRatExpr expr builtin) => TensorReductionAccessor (expr builtin)
+accessReduceMaxRat :: (HasRatExpr expr arg builtin) => TensorReductionAccessor (expr builtin) (arg builtin)
 accessReduceMaxRat = accessArgs accessReduceMaxRatBuiltin
 
 --------------------------------------------------------------------------------
 -- Lists
 
-type HasListType expr builtin =
-  ( HasBuiltinConstructor expr,
+type HasListType expr arg builtin =
+  ( HasBuiltinConstructor expr arg,
     BuiltinHasListType builtin
   )
 
-type HasListExpr expr builtin =
-  ( HasBuiltinConstructor expr,
+type HasListExpr expr arg builtin =
+  ( HasBuiltinConstructor expr arg,
     BuiltinHasListLiterals builtin
   )
 
-accessListType :: (HasListType expr builtin) => Op1Accessor (expr builtin)
+accessListType :: (HasListType expr arg builtin) => Op1Accessor (expr builtin) (arg builtin)
 accessListType = accessArgs accessListTypeBuiltin
 
-accessNil :: (HasListExpr expr builtin) => Accessor (expr builtin) (NilArgs (expr builtin))
+accessNil :: (HasListExpr expr arg builtin) => Accessor (expr builtin) (NilArgs (arg builtin))
 accessNil = accessArgs accessNilBuiltin
 
-accessCons :: (HasListExpr expr builtin) => Accessor (expr builtin) (ConsArgs (expr builtin))
+accessCons :: (HasListExpr expr arg builtin) => Accessor (expr builtin) (ConsArgs (arg builtin))
 accessCons = accessArgs accessConsBuiltin
 
-accessMapList :: (HasListExpr expr builtin) => Accessor (expr builtin) (MapListArgs (expr builtin))
+accessMapList :: (HasListExpr expr arg builtin) => Accessor (expr builtin) (MapListArgs (arg builtin))
 accessMapList = accessArgs accessMapListBuiltin
 
-accessFoldList :: (HasListExpr expr builtin) => Accessor (expr builtin) (FoldListArgs (expr builtin))
+accessFoldList :: (HasListExpr expr arg builtin) => Accessor (expr builtin) (FoldListArgs (arg builtin))
 accessFoldList = accessArgs accessFoldListBuiltin
 
 --------------------------------------------------------------------------------
 -- Vector
 
-type HasVectorType expr builtin =
-  ( HasBuiltinConstructor expr,
+type HasVectorType expr arg builtin =
+  ( HasBuiltinConstructor expr arg,
     BuiltinHasVectorType builtin
   )
 
-type HasVectorExpr expr builtin =
-  ( HasBuiltinConstructor expr,
+type HasVectorExpr expr arg builtin =
+  ( HasBuiltinConstructor expr arg,
     BuiltinHasVectors builtin,
     BuiltinHasNatLiterals builtin
   )
 
-accessVectorType :: (HasVectorType expr builtin) => Accessor (expr builtin) (VectorTypeArgs (expr builtin))
+accessVectorType :: (HasVectorType expr arg builtin) => Accessor (expr builtin) (VectorTypeArgs (arg builtin))
 accessVectorType = accessArgs accessVectorTypeBuiltin
 
-accessVecLit :: (HasVectorExpr expr builtin) => Accessor (expr builtin) (VecLitArgs (expr builtin))
+accessVecLit :: (HasVectorExpr expr arg builtin) => Accessor (expr builtin) (VecLitArgs (arg builtin))
 accessVecLit = accessArgs accessVecLitBuiltin
 
-accessAtVector :: (HasVectorExpr expr builtin) => Accessor (expr builtin) (AtVectorArgs (expr builtin))
+accessAtVector :: (HasVectorExpr expr arg builtin) => Accessor (expr builtin) (AtVectorArgs (arg builtin))
 accessAtVector = accessArgs accessAtVectorBuiltin
 
 accessForeachVector ::
-  (HasBuiltinConstructor expr, BuiltinHasForeach builtin) =>
-  Accessor (expr builtin) (ForeachVectorArgs (expr builtin))
+  (HasBuiltinConstructor expr arg, BuiltinHasForeach builtin) =>
+  Accessor (expr builtin) (ForeachVectorArgs (arg builtin))
 accessForeachVector = accessArgs accessForeachVectorBuiltin
 
 --------------------------------------------------------------------------------
 -- Tensors
 
-type HasTensorType expr builtin =
-  ( HasBuiltinConstructor expr,
+type HasTensorType expr arg builtin =
+  ( HasBuiltinConstructor expr arg,
     BuiltinHasTensorType builtin
   )
 
-type HasTensorExpr expr builtin =
-  ( HasBuiltinConstructor expr,
+type HasTensorExpr expr arg builtin =
+  ( HasBuiltinConstructor expr arg,
     BuiltinHasTensors builtin,
     BuiltinHasListLiterals builtin,
     BuiltinHasNatLiterals builtin,
@@ -350,24 +339,24 @@ type HasTensorExpr expr builtin =
     BuiltinHasNatType builtin
   )
 
-accessTensorType :: (HasTensorType expr builtin) => Accessor (expr builtin) (TensorTypeArgs (expr builtin))
+accessTensorType :: (HasTensorType expr arg builtin) => Accessor (expr builtin) (TensorTypeArgs (arg builtin))
 accessTensorType = accessArgs accessTensorTypeBuiltin
 
-accessStackTensor :: (HasTensorExpr expr builtin) => Accessor (expr builtin) (StackTensorArgs (expr builtin))
+accessStackTensor :: (HasTensorExpr expr arg builtin) => Accessor (expr builtin) (StackTensorArgs (arg builtin))
 accessStackTensor = accessArgs accessStackTensorBuiltin
 
-accessConstTensor :: (HasTensorExpr expr builtin) => Accessor (expr builtin) (ConstTensorArgs (expr builtin))
+accessConstTensor :: (HasTensorExpr expr arg builtin) => Accessor (expr builtin) (ConstTensorArgs (arg builtin))
 accessConstTensor = accessArgs accessConstTensorBuiltin
 
-accessAtTensor :: (HasTensorExpr expr builtin) => Accessor (expr builtin) (AtTensorArgs (expr builtin))
+accessAtTensor :: (HasTensorExpr expr arg builtin) => Accessor (expr builtin) (AtTensorArgs (arg builtin))
 accessAtTensor = accessArgs accessAtTensorBuiltin
 
 accessForeachTensor ::
-  (HasBuiltinConstructor expr, BuiltinHasForeach builtin) =>
-  Accessor (expr builtin) (ForeachTensorArgs (expr builtin))
+  (HasBuiltinConstructor expr arg, BuiltinHasForeach builtin) =>
+  Accessor (expr builtin) (ForeachTensorArgs (arg builtin))
 accessForeachTensor = accessArgs accessForeachTensorBuiltin
 
 accessIterate ::
-  (HasBuiltinConstructor expr, BuiltinHasIterate builtin) =>
-  Accessor (expr builtin) (IterateArgs (expr builtin))
+  (HasBuiltinConstructor expr arg, BuiltinHasIterate builtin) =>
+  Accessor (expr builtin) (IterateArgs (arg builtin))
 accessIterate = accessArgs accessIterateBuiltin

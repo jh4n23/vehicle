@@ -9,7 +9,6 @@ import Control.Monad.Writer
 import Data.Data (Proxy (..))
 import Vehicle.Compile.Prelude
 import Vehicle.Data.Builtin.Interface.Print
-import Vehicle.Data.Code.Value
 import Vehicle.Data.Variable.Bound.Context.Generic
 import Vehicle.Data.Variable.Bound.Context.Name.Instance
 import Vehicle.Data.Variable.Bound.Context.Tensor.Instance
@@ -79,13 +78,14 @@ instance (MonadFreeContext builtin m) => MonadFreeContext builtin (MaybeT m) whe
   getFreeCtx = lift . getFreeCtx
   getDeclEntry proxy = lift . getDeclEntry proxy
 
---------------------------------------------------------------------------------
--- Operations
-
-getFreeEnv ::
-  forall builtin m.
+getDeclType ::
   (MonadFreeContext builtin m) =>
-  m (FreeEnv builtin)
-getFreeEnv = do
-  ctx <- getFreeCtx (Proxy @builtin)
-  return ctx
+  Proxy builtin ->
+  Identifier ->
+  m (Type builtin)
+getDeclType proxy ident = do
+  decl <- getDeclEntry proxy ident
+  return $ case decl of
+    DefAbstract _ _ _ t -> t
+    DefFunction _ _ _ t _ -> t
+    DefRecord p _ _ telescope _ -> foldr (Pi p) (Universe p 0) telescope

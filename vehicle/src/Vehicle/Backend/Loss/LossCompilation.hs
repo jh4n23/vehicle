@@ -29,16 +29,17 @@ module Vehicle.Backend.Loss.LossCompilation
 where
 
 import Vehicle.Backend.Loss.Core hiding (currentPass)
-import Vehicle.Compile.Normalise.NBE (normaliseAppInEmptyFreeEnv, normaliseClosure)
+import Vehicle.Compile.Normalise.NBE (forceValue)
 import Vehicle.Compile.Normalise.Quote (Quote (..))
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyVerbose)
-import Vehicle.Data.Builtin.Interface (Accessor (..))
+import Vehicle.Compile.TypedView
+import Vehicle.Data.Builtin.Interface (Accessor (..), BuiltinHasTensors (accessConstTensorBuiltin))
 import Vehicle.Data.Builtin.Interface.Normalise
 import Vehicle.Data.Builtin.Loss
 import Vehicle.Data.Builtin.Standard (Builtin (..))
+import Vehicle.Data.Builtin.Standard.Normalise (mkDims)
 import Vehicle.Data.Code.Interface
-import Vehicle.Data.Code.TypedView
 import Vehicle.Data.Code.Value
 import Vehicle.Data.DifferentiableLogic
 import Vehicle.Data.Tensor (Tensor, foldMapTensor, shapeOf)
@@ -53,30 +54,32 @@ convertType ::
   (MonadLogic m) =>
   VType Builtin ->
   m (VType LossBuiltin)
-convertType typ = logConversion typ $ case toTypeValue typ of
-  VPiType binder closure -> convertPiType binder closure
-  VUnitType {} -> unexpectedOperation "unit type"
-  VFreeTypeVar {} -> unexpectedOperation "free var type"
-  VBoolType -> convertBoolType
-  VBoundTypeVar lv spine -> convertBoundVar lv spine
-  VRatType -> return IRatType
-  VIndexType n -> IIndexType <$> convertDim n
-  VNatType -> return INatType
-  VListType tElem -> IListType <$> convertType tElem
-  VVectorType {} -> unsupportedOperation "VectorType"
-  VBoolTensorType ds -> ITensorType <$> convertBoolType <*> convertDims ds
-  VRatTensorType ds -> ITensorType IRatType <$> convertDims ds
-  VNatTensorType ds -> ITensorType INatType <$> convertDims ds
-  VIndexTensorType n ds -> (ITensorType . IIndexType <$> convertDim n) <*> convertDims ds
+convertType typ = logConversion typ $ do
+  forcedType <- forceValue typ
+  case toTypeValue forcedType of
+    VPiType binder closure -> convertPiType binder closure
+    VUnitType {} -> unexpectedOperation "unit type"
+    VFreeTypeVar {} -> unexpectedOperation "free var type"
+    VBoolType -> convertBoolType
+    VBoundTypeVar lv spine -> convertBoundVar lv spine
+    VRatType -> return $ Forced IRatType
+    VIndexType n -> Forced . IIndexType <$> convertDim n
+    VNatType -> return $ Forced INatType
+    VListType tElem -> Forced . IListType <$> convertType tElem
+    VVectorType {} -> unsupportedOperation "VectorType"
+    VTensorType tElem ds -> do
+      tElem' <- convertType tElem
+      ds' <- convertDims ds
+      return $ Forced $ ITensorType tElem' ds'
 
 convertBoolType :: (MonadLogic m) => m (VType LossBuiltin)
-convertBoolType = return IRatType
+convertBoolType = return $ Forced IRatType
 
 convertPiType :: (MonadLogic m) => VBinder Builtin -> Closure Builtin -> m (VType LossBuiltin)
 convertPiType binder closure = do
   binder' <- traverse convertType binder
   closure' <- convertClosure convertType binder closure
-  return $ VPi binder' closure'
+  return $ Forced $ VPi binder' closure'
 
 --------------------------------------------------------------------------------
 -- Dims
@@ -85,23 +88,30 @@ convertDim ::
   (MonadLogic m) =>
   Value Builtin ->
   m (Value LossBuiltin)
-convertDim value = logConversion value $ case toNatValue value of
-  VNatBoundVar v spine -> convertBoundVar v spine
-  VNatParameter ident -> return $ VFreeVar ident []
-  VNatLiteral i -> return $ mkExpr accessNatLiteral i
-  VNatAdd args -> mkExpr accessAddNat <$> traverseOp2Args convertDim args
-  VNatMul args -> mkExpr accessMulNat <$> traverseOp2Args convertDim args
-  VNatIf {} -> unsupportedOperation "if"
+convertDim value = logConversion value $ do
+  forcedValue <- forceValue value
+  case toNatValue forcedValue of
+    VNatBoundVar v spine -> convertBoundVar v spine
+    VNatParameter ident -> return $ Forced $ VFreeVar ident []
+    VNatLiteral i -> return $ Forced $ mkExpr accessNatLiteral i
+    VNatAdd args -> Forced . mkExpr accessAddNat <$> traverseOp2Args convertDim args
+    VNatMul args -> Forced . mkExpr accessMulNat <$> traverseOp2Args convertDim args
+    VNatIf {} -> unsupportedOperation "if"
 
 convertDims ::
   (MonadLogic m) =>
   VDims Builtin ->
   m (VDims LossBuiltin)
-convertDims value = logConversion value $ case toDimensionsValue value of
-  VDimsNil -> return IDimNil
-  VDimsCons d ds -> IDimCons <$> convertDim d <*> convertDims ds
-  VDimsBoundVar lv spine -> convertBoundVar lv spine
-  VDimsIf args -> convertIf args
+convertDims value = logConversion value $ do
+  forcedValue <- forceValue value
+  case toDimensionsValue forcedValue of
+    VDimsBoundVar lv spine -> convertBoundVar lv spine
+    VDimsIf args -> convertIf args
+    VDimsNil -> return $ Forced $ INil $ Forced INatType
+    VDimsCons d ds -> do
+      d' <- convertDim d
+      ds' <- convertDims ds
+      return $ Forced $ ICons (Forced INatType) d' ds'
 
 --------------------------------------------------------------------------------
 -- Variables
@@ -111,12 +121,14 @@ convertFunction ::
   (Value Builtin -> m (Value LossBuiltin)) ->
   Value Builtin ->
   m (Value LossBuiltin)
-convertFunction convertValue value = case value of
-  VLam binder closure -> do
-    binder' <- traverse convertType binder
-    closure' <- convertClosure convertValue binder closure
-    return $ VLam binder' closure'
-  _ -> convertValue value
+convertFunction convertValue value = do
+  forcedValue <- forceValue value
+  case forcedValue of
+    VLam binder closure -> do
+      binder' <- traverse convertType binder
+      closure' <- convertClosure convertValue binder closure
+      return $ Forced $ VLam binder' closure'
+    _ -> convertValue value
 
 convertClosure ::
   (MonadLogic m) =>
@@ -125,7 +137,7 @@ convertClosure ::
   Closure Builtin ->
   m (Closure LossBuiltin)
 convertClosure convertValue binder closure = do
-  normBody <- normaliseClosure binder closure
+  normBody <- extendClosureWithBound binder closure
   finalCtx <- getShrunkenContext
   lossBody <- addNonTensorBinderToContext binder $ do
     normLossBody <- convertFunction convertValue normBody
@@ -145,12 +157,12 @@ convertBoundVar lv = \case
   _ : _ -> unexpectedExprError currentPass "bound function variables"
   [] -> do
     (originalLv, maybeVars) <- lookupVariableInNestedCtx lv
-    let var = VBoundVar originalLv []
+    let var = Forced $ VBoundVar originalLv []
     case maybeVars of
       Nothing -> return var
       Just (parentVar, sliceVar) -> do
         let indices = findSliceIndices parentVar sliceVar
-        return $ mkIndexInto IRatType var (shapeOf parentVar) indices
+        return $ mkIndexInto (Forced IRatType) var (shapeOf parentVar) indices
 
 convertFreeVar ::
   (MonadLogic m) =>
@@ -158,34 +170,36 @@ convertFreeVar ::
   Spine Builtin ->
   m (Value LossBuiltin)
 convertFreeVar name = \case
-  [] -> return $ VFreeVar name []
+  [] -> return $ Forced $ VFreeVar name []
   spine -> case getExpr accessSpine spine of
     Nothing -> unexpectedExprError currentPass "non-network args"
     Just (NetworkAppArgs arg) -> do
       args' <- NetworkAppArgs <$> convertRatTensor arg
-      return $ VFreeVar name $ mkExpr accessSpine args'
+      return $ Forced $ VFreeVar name $ mkExpr accessSpine args'
 
 --------------------------------------------------------------------------------
 -- Bool
 
 convertBoolTensor :: (MonadLogic m) => Value Builtin -> m (Value LossBuiltin)
-convertBoolTensor value = logConversion value $ case toBoolTensorValue value of
-  VBoolTensorLiteral bs -> convertBoolTensorLiteral bs
-  VBoolConstTensor args -> convertConstTensor convertBoolTensor args
-  VBoolStackTensor args -> convertStackTensor convertBoolTensor args
-  VBoolTensorNot args -> convertNot =<< convertTensorOp1 convertBoolTensor args
-  VBoolTensorAnd args -> convertAnd =<< convertTensorOp2 convertBoolTensor args
-  VBoolTensorOr args -> convertOr =<< convertTensorOp2 convertBoolTensor args
-  VBoolTensorCompareIndex args -> convertIndexComparison args
-  VBoolTensorCompareNat args -> convertNatComparison args
-  VBoolTensorCompareRatPointwise args -> convertRatTensorPointwiseComparison args
-  VBoolTensorCompareRatReduced args -> convertRatTensorReducedComparison args
-  VBoolTensorReduceAnd args -> convertReduceAnd =<< convertTensorReduction convertBoolTensor args
-  VBoolTensorReduceOr args -> convertReduceOr =<< convertTensorReduction convertBoolTensor args
-  VBoolTensorQuantifyRat {} -> unexpectedOperation "quantifier"
-  VBoolTensorBoolIf args -> convertIf args
-  VBoolTensorAt args -> convertAtTensor convertBoolTensor args
-  VBoolTensorForeach args -> convertForeachTensor convertBoolTensor args
+convertBoolTensor value = logConversion value $ do
+  forcedValue <- forceValue value
+  case toBoolTensorValue forcedValue of
+    VBoolTensorLiteral bs -> convertBoolTensorLiteral bs
+    VBoolConstTensor args -> convertConstTensor convertBoolTensor args
+    VBoolStackTensor args -> convertStackTensor convertBoolTensor args
+    VBoolTensorNot args -> convertNot =<< convertTensorOp1 convertBoolTensor args
+    VBoolTensorAnd args -> convertAnd =<< convertTensorOp2 convertBoolTensor args
+    VBoolTensorOr args -> convertOr =<< convertTensorOp2 convertBoolTensor args
+    VBoolTensorCompareIndex args -> convertIndexComparison args
+    VBoolTensorCompareNat args -> convertNatComparison args
+    VBoolTensorCompareRatPointwise args -> convertRatTensorPointwiseComparison args
+    VBoolTensorCompareRatReduced args -> convertRatTensorReducedComparison args
+    VBoolTensorReduceAnd args -> convertReduceAnd =<< convertTensorReduction convertBoolTensor args
+    VBoolTensorReduceOr args -> convertReduceOr =<< convertTensorReduction convertBoolTensor args
+    VBoolTensorQuantifyRat {} -> unexpectedOperation "quantifier"
+    VBoolTensorBoolIf args -> convertIf args
+    VBoolTensorAt args -> convertAtTensor convertBoolTensor args
+    VBoolTensorForeach args -> convertForeachTensor convertBoolTensor args
 
 convertBoolTensorLiteral :: (MonadLogic m) => Tensor Bool -> m (Value LossBuiltin)
 convertBoolTensorLiteral tensor = do
@@ -193,11 +207,15 @@ convertBoolTensorLiteral tensor = do
   falseExpr <- getLogicField FalsityElement
 
   let convertBool b = if b then trueExpr else falseExpr
-  let foldLayer shape elems = do
-        let dim = length elems
-        let dims = implicitIrrelevant (mkDims shape)
-        let args = implicit (INatLiteral dim) : dims : implicit INatType : fmap explicit elems
-        VBuiltin (LossBuiltinFunction StackTensor) args
+  let foldLayer shape elems =
+        Forced $
+          mkExpr accessStackTensor $
+            StackTensorArgs
+              { stackType = Forced INatType,
+                stackFirstDim = Forced $ INatLiteral $ length elems,
+                stackRemainingDims = mkDims shape,
+                stackElements = elems
+              }
   return $ foldMapTensor convertBool foldLayer tensor
 
 convertNot :: (MonadLogic m) => TensorOp1Args (Value LossBuiltin) -> m (Value LossBuiltin)
@@ -246,7 +264,7 @@ convertLogicField field args = do
   logDebugM MaxDetail $ do
     fnDoc <- prettyFriendlyInCtx fn
     return $ "subst-field" <+> pretty field <> ":" <+> fnDoc
-  normaliseAppInEmptyFreeEnv mempty fn (mkExpr accessSpine args)
+  return $ UnforcedApp fn (mkExpr accessSpine args)
 
 --------------------------------------------------------------------------------
 -- Index
@@ -255,10 +273,12 @@ convertIndex ::
   (MonadLogic m) =>
   Value Builtin ->
   m (Value LossBuiltin)
-convertIndex value = logConversion value $ case toIndexValue value of
-  VIndexLiteral i dim -> IIndexLiteral i <$> convertDim dim
-  VIndexBoundVar v spine -> convertBoundVar v spine
-  VIndexIf args -> convertIf args
+convertIndex value = logConversion value $ do
+  forcedValue <- forceValue value
+  case toIndexValue forcedValue of
+    VIndexLiteral i -> Forced . IIndexLiteral i <$> convertDim dim
+    VIndexBoundVar v spine -> convertBoundVar v spine
+    VIndexIf args -> convertIf args
 
 --------------------------------------------------------------------------------
 -- Rat
@@ -267,27 +287,29 @@ convertRatTensor ::
   (MonadLogic m) =>
   Value Builtin ->
   m (Value LossBuiltin)
-convertRatTensor value = logConversion value $ case toRatTensorValue value of
-  VRatTensorBoundVar lv -> convertBoundVar lv mempty
-  VRatTensorFreeVar name [] -> return $ VFreeVar name []
-  VRatTensorFreeVar name spine -> convertFreeVar name spine
-  VRatTensorLiteral t -> return $ mkExpr accessRatTensorLiteral t
-  VNegRatTensor args -> mkExpr accessNegRatTensor <$> convertTensorOp1 convertRatTensor args
-  VAddRatTensor args -> mkExpr accessAddRatTensor <$> convertTensorOp2 convertRatTensor args
-  VSubRatTensor args -> mkExpr accessSubRatTensor <$> convertTensorOp2 convertRatTensor args
-  VMulRatTensor args -> mkExpr accessMulRatTensor <$> convertTensorOp2 convertRatTensor args
-  VDivRatTensor args -> mkExpr accessDivRatTensor <$> convertTensorOp2 convertRatTensor args
-  VMinRatTensor args -> mkExpr accessMinRatTensor <$> convertTensorOp2 convertRatTensor args
-  VMaxRatTensor args -> mkExpr accessMaxRatTensor <$> convertTensorOp2 convertRatTensor args
-  VReduceAddRatTensor args -> mkExpr accessReduceAddRat <$> convertTensorReduction convertRatTensor args
-  VReduceMulRatTensor args -> mkExpr accessReduceMulRat <$> convertTensorReduction convertRatTensor args
-  VReduceMinRatTensor args -> mkExpr accessReduceMinRat <$> convertTensorReduction convertRatTensor args
-  VReduceMaxRatTensor args -> mkExpr accessReduceMaxRat <$> convertTensorReduction convertRatTensor args
-  VIfRatTensor args -> convertIf args
-  VRatConstTensor args -> convertConstTensor convertRatTensor args
-  VRatStackTensor args -> convertStackTensor convertRatTensor args
-  VRatAt args -> convertAtTensor convertRatTensor args
-  VRatForeach args -> convertForeachTensor convertRatTensor args
+convertRatTensor value = logConversion value $ do
+  forcedValue <- forceValue value
+  case toRatTensorValue forcedValue of
+    VRatTensorBoundVar lv -> convertBoundVar lv mempty
+    VRatTensorFreeVar name [] -> return $ Forced $ VFreeVar name []
+    VRatTensorFreeVar name spine -> convertFreeVar name spine
+    VRatTensorLiteral t -> return $ Forced $ mkExpr accessRatTensorLiteral t
+    VNegRatTensor args -> Forced . mkExpr accessNegRatTensor <$> convertTensorOp1 convertRatTensor args
+    VAddRatTensor args -> Forced . mkExpr accessAddRatTensor <$> convertTensorOp2 convertRatTensor args
+    VSubRatTensor args -> Forced . mkExpr accessSubRatTensor <$> convertTensorOp2 convertRatTensor args
+    VMulRatTensor args -> Forced . mkExpr accessMulRatTensor <$> convertTensorOp2 convertRatTensor args
+    VDivRatTensor args -> Forced . mkExpr accessDivRatTensor <$> convertTensorOp2 convertRatTensor args
+    VMinRatTensor args -> Forced . mkExpr accessMinRatTensor <$> convertTensorOp2 convertRatTensor args
+    VMaxRatTensor args -> Forced . mkExpr accessMaxRatTensor <$> convertTensorOp2 convertRatTensor args
+    VReduceAddRatTensor args -> Forced . mkExpr accessReduceAddRat <$> convertTensorReduction convertRatTensor args
+    VReduceMulRatTensor args -> Forced . mkExpr accessReduceMulRat <$> convertTensorReduction convertRatTensor args
+    VReduceMinRatTensor args -> Forced . mkExpr accessReduceMinRat <$> convertTensorReduction convertRatTensor args
+    VReduceMaxRatTensor args -> Forced . mkExpr accessReduceMaxRat <$> convertTensorReduction convertRatTensor args
+    VIfRatTensor args -> convertIf args
+    VRatConstTensor args -> convertConstTensor convertRatTensor args
+    VRatStackTensor args -> convertStackTensor convertRatTensor args
+    VRatAt args -> convertAtTensor convertRatTensor args
+    VRatForeach args -> convertForeachTensor convertRatTensor args
 
 --------------------------------------------------------------------------------
 -- Vector
@@ -362,7 +384,7 @@ convertAtTensor convertValue (AtTensorArgs typ dim dims xs i) = do
   dims' <- convertDims dims
   xs' <- convertValue xs
   i' <- convertIndex i
-  return $ mkExpr accessAtTensor $ AtTensorArgs type' dim' dims' xs' i'
+  return $ Forced $ mkExpr accessAtTensor $ AtTensorArgs type' dim' dims' xs' i'
 
 convertStackTensor ::
   (MonadLogic m) =>
@@ -374,7 +396,7 @@ convertStackTensor convertValue (StackTensorArgs typ dim dims xs) = do
   dim' <- convertDim dim
   dims' <- convertDims dims
   xs' <- traverse convertValue xs
-  return $ mkExpr accessStackTensor $ StackTensorArgs type' dim' dims' xs'
+  return $ Forced $ mkExpr accessStackTensor $ StackTensorArgs type' dim' dims' xs'
 
 convertConstTensor ::
   (MonadLogic m) =>
@@ -385,7 +407,7 @@ convertConstTensor convertValue (ConstTensorArgs typ value dims) = do
   type' <- convertType typ
   value' <- convertValue value
   dims' <- convertDims dims
-  evalConstTensor $ ConstTensorArgs type' value' dims'
+  return $ unforcedBuiltinApp accessConstTensorBuiltin $ ConstTensorArgs type' value' dims'
 
 convertForeachTensor ::
   (MonadLogic m) =>
@@ -397,7 +419,7 @@ convertForeachTensor convertValue (ForeachTensorArgs t dim dims fn) = do
   dim' <- convertDim dim
   dims' <- convertDims dims
   fn' <- convertFunction convertValue fn
-  return $ mkExpr accessForeachTensor $ ForeachTensorArgs t' dim' dims' fn'
+  return $ Forced $ mkExpr accessForeachTensor $ ForeachTensorArgs t' dim' dims' fn'
 
 --------------------------------------------------------------------------------
 -- Utils

@@ -29,6 +29,7 @@ import Data.Set qualified as Set (member, unions)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Vehicle.Compile.Error
+import Vehicle.Compile.Normalise.Core (NormalisableBuiltin (..))
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyExternal, prettyFriendly, prettyFriendlyEmptyCtx, prettyVerbose)
 import Vehicle.Data.Builtin.Interface.Print
@@ -53,7 +54,7 @@ import Vehicle.Data.Hashing ()
 -- by Wen et al is a good starting point.
 monomorphise ::
   forall m builtin.
-  (MonadCompile m, Hashable builtin, PrintableBuiltin builtin) =>
+  (MonadCompile m, Hashable builtin, NormalisableBuiltin builtin) =>
   Prog builtin ->
   RootDeclarations ->
   m (Prog builtin)
@@ -80,7 +81,7 @@ type MonadCollect builtin m =
     MonadState (CandidateApplications builtin) m,
     MonadWriter (SubsitutionSolutions builtin) m,
     Hashable builtin,
-    PrintableBuiltin builtin
+    NormalisableBuiltin builtin
   )
 
 monomorphiseProg ::
@@ -270,7 +271,7 @@ type MonadInsert builtin m =
   ( MonadCompile m,
     MonadReader (SubsitutionSolutions builtin) m,
     Hashable builtin,
-    PrintableBuiltin builtin
+    NormalisableBuiltin builtin
   )
 
 replacePreviousApplications ::

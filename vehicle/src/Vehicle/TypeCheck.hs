@@ -20,7 +20,6 @@ import Vehicle.Backend.Prelude
 import Vehicle.Compile.Dependency (AdjacencyGraph, emptyAdjacencyGraph, insertEdge, insertNode, topologicalSort)
 import Vehicle.Compile.Error
 import Vehicle.Compile.Monomorphisation (monomorphise)
-import Vehicle.Compile.Normalise.NBE (evalDecl)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
 import Vehicle.Compile.Print.Error
@@ -38,8 +37,6 @@ import Vehicle.Data.Builtin.Standard.Instances (standardBuiltinInstances)
 import Vehicle.Data.Builtin.Standard.Scoping ()
 import Vehicle.Data.Builtin.Standard.Type ()
 import Vehicle.Data.Code.ModuleInterface (ImportedModuleContext, ModuleInterface (..), mergeImportedFreeEnvs, typedModule)
-import Vehicle.Data.Code.Value (FreeEnv)
-import Vehicle.Data.Variable.Free.Context (runFreeContextT)
 import Vehicle.Libraries (ensureLatestVersionOfLibraryInstalled, resolveLibrary)
 import Vehicle.Libraries.Core (ResolvedLibrary (..))
 import Vehicle.Libraries.StandardLibrary (standardLibrary, standardLibraryContent, standardLibraryDefinitionsModulePath, standardLibraryName)
@@ -151,7 +148,7 @@ instance Semigroup ModuleStatus where
 
 data ModuleInfo = ModuleInfo
   { moduleInterface :: ModuleInterface Builtin,
-    moduleFreeEnv :: FreeEnv Builtin,
+    moduleFreeEnv :: FreeCtx Builtin,
     moduleStatus :: ModuleStatus
   }
 
@@ -324,7 +321,7 @@ loadCachedModule moduleFile implicitImports moduleText moduleInterface = do
   case status of
     Changed -> parseAndTypeCheckModule moduleFile implicitImports moduleText
     Unchanged -> do
-      freeEnv <- calculateModuleEnv importedCtx decls
+      let freeEnv = calculateModuleEnv importedCtx decls
       return $
         ModuleInfo
           { moduleInterface = moduleInterface,
@@ -384,19 +381,11 @@ parseAndTypeCheckModule moduleFile implicitImports moduleText = do
       }
 
 calculateModuleEnv ::
-  forall m.
-  (MonadCompile m) =>
   ImportedModuleContext Builtin ->
   [Decl Builtin] ->
-  m (FreeEnv Builtin)
-calculateModuleEnv importedCtx = go (mergeImportedFreeEnvs importedCtx)
-  where
-    go :: FreeEnv Builtin -> [Decl Builtin] -> m (FreeEnv Builtin)
-    go env = \case
-      [] -> return env
-      d : ds -> do
-        normDecl <- runFreeContextT env $ evalDecl d
-        go (Map.insert (identifierOf normDecl) normDecl env) ds
+  FreeCtx Builtin
+calculateModuleEnv importedCtx decls =
+  mergeImportedFreeEnvs importedCtx <> fromMappedValueList identifierOf decls
 
 cyclicImportsError :: (MonadTCMProg m) => ModulePath -> [ModulePath] -> m a
 cyclicImportsError newModule previousModules =

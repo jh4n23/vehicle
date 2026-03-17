@@ -19,9 +19,8 @@ import Vehicle.Compile.Type.Core
 import Vehicle.Compile.Type.Meta.Variable
 import Vehicle.Compile.Type.Monad
 import Vehicle.Compile.Type.Monad.Class
-import Vehicle.Data.Builtin.Interface.Normalise (NormalisableBuiltin)
 import Vehicle.Data.Builtin.Interface.Print
-import Vehicle.Data.Code.Value
+import Vehicle.Data.Code.Value (Value, boundContextToEnv, thunkifyExpr)
 import Vehicle.Data.DSL
 import Vehicle.Data.Variable.Bound.Context.Generic
 
@@ -36,8 +35,8 @@ malformedConstraintError c =
 createInstanceUnification ::
   (MonadTypeChecker builtin m) =>
   (ConstraintContext builtin, InstanceConstraintOrigin builtin) ->
-  Expr builtin ->
-  Expr builtin ->
+  Value builtin ->
+  Value builtin ->
   m (WithContext (UnificationConstraint builtin))
 createInstanceUnification (ctx, origin) e1 e2 = do
   let unifyOrigin = CheckingInstanceType origin
@@ -80,18 +79,20 @@ makeInstanceDatabase allInstances = do
 
 instantiateInstanceConstraintSolution ::
   forall builtin m.
-  (MonadTypeChecker builtin m, NormalisableBuiltin builtin) =>
+  (MonadTypeChecker builtin m) =>
   WithContext (InstanceConstraint builtin) ->
   Expr builtin ->
   m ()
 instantiateInstanceConstraintSolution (WithContext (Resolve origin meta _ _ _) ctx) solution = do
   metaInfo <- getMetaInfo meta
   let boundCtx = boundContextOf ctx
-  case unnormalised <$> metaSolution metaInfo of
+  case metaSolution metaInfo of
     Nothing -> solveMeta meta solution boundCtx
     Just existingSolution -> do
       logDebug MaxDetail ("solved" <+> pretty meta <+> "as" <+> prettyVerbose solution)
       logDebug MaxDetail (indent 2 ("however" <+> pretty meta <+> "=" <+> prettyVerbose existingSolution <+> "already so unifying"))
       let abstractedSolution = abstractOverCtx (metaCtx metaInfo) solution
-      newConstraint <- createInstanceUnification (ctx, origin) abstractedSolution existingSolution
+      let normSolution = thunkifyExpr (boundContextToEnv boundCtx) abstractedSolution
+      let normExistingSolution = thunkifyExpr (boundContextToEnv boundCtx) existingSolution
+      newConstraint <- createInstanceUnification (ctx, origin) normSolution normExistingSolution
       addUnificationConstraints [newConstraint]

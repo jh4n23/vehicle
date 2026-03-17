@@ -8,42 +8,38 @@ import Control.Monad (forM)
 import Control.Monad.Except (MonadError (..))
 import Data.Maybe (mapMaybe)
 import Vehicle.Compile.Error
-import Vehicle.Compile.Normalise.NBE (normalise)
+import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Prelude
-import Vehicle.Compile.Print (prettyFriendly)
 import Vehicle.Compile.Type.Constraint.Core
 import Vehicle.Compile.Type.Core
 import Vehicle.Compile.Type.Meta (MetaSet)
 import Vehicle.Compile.Type.Meta.Set qualified as MetaSet
 import Vehicle.Compile.Type.Monad.Class
+import Vehicle.Compile.TypedView
 import Vehicle.Data.Builtin.Interface
+import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin)
 import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Code.Interface
-import Vehicle.Data.Code.TypedView
 import Vehicle.Data.Code.Value
-import Vehicle.Data.Variable.Bound.Context.Generic (runBoundContextT)
+import Vehicle.Data.Variable.Bound.Context.Generic (namedBoundCtxOf)
+import Vehicle.Data.Variable.Bound.Context.Name (MonadReadableNameContext, runNameBoundContextT)
 
 --------------------------------------------------------------------------------
 -- Solve index constraints
 
 solveIndexConstraint ::
-  (MonadTypeChecker Builtin m) =>
+  (MonadTypeChecker Builtin m, TypableBuiltin Builtin) =>
   WithContext (InstanceConstraint Builtin) ->
   m ()
 solveIndexConstraint constraint = do
-  normConstraint <- substMetaVariables constraint
-  logDebug MaxDetail $ "Forced:" <+> prettyFriendly normConstraint
-
-  let args = mapMaybe getExplicitArg $ goalSpine $ instanceGoal $ objectIn normConstraint
-  -- TODO Switch this over to forcing
-  normArgs <- runBoundContextT (boundContext $ contextOf constraint) $ traverse normalise args
-  progress <- solveInDomain normConstraint normArgs
+  let args = mapMaybe getExplicitArg $ goalSpine $ instanceGoal $ objectIn constraint
+  progress <- runNameBoundContextT (namedBoundCtxOf $ contextOf constraint) $ solveInDomain constraint args
   case progress of
     Nothing -> do
       let solution = Builtin mempty (BuiltinConstructor UnitLiteral)
-      instantiateInstanceConstraintSolution normConstraint solution
+      instantiateInstanceConstraintSolution constraint solution
     Just metas -> do
-      let blockedConstraint = blockConstraintOn normConstraint metas
+      let blockedConstraint = blockConstraintOn constraint metas
       addAuxiliaryInstanceConstraints [blockedConstraint]
 
 -- | Function signature for constraints solved by type class resolution.
@@ -51,45 +47,55 @@ solveIndexConstraint constraint = do
 -- search.
 solveInDomain ::
   forall m.
-  (MonadTypeChecker Builtin m) =>
+  (MonadTypeChecker Builtin m, MonadReadableNameContext m, TypableBuiltin Builtin) =>
   WithContext (InstanceConstraint Builtin) ->
   [VType Builtin] ->
   m (Maybe MetaSet)
-solveInDomain _ [_, typ@VMeta {}] = return $ blockOnMetas [typ]
-solveInDomain c [value, typ] = case toTypeValue typ of
-  VNatType {} -> return Nothing
-  VRatTensorType IDimNil -> return Nothing
-  VIndexType size -> case value of
-    VMeta {} -> return $ blockOnMetas [value]
-    INatLiteral n -> do
-      (sizeBlockingMetas, sizeLowerBound) <- findLowerBound ctx value size
-      if n < sizeLowerBound
-        then return Nothing
-        else
-          if not (MetaSet.null sizeBlockingMetas)
-            then return $ Just sizeBlockingMetas
-            else throwError $ TypingError $ FailedIndexConstraintTooBig ctx n sizeLowerBound
-    _ -> malformedConstraintError c
-  _ -> malformedConstraintError c
+solveInDomain c [value, domain] = do
+  forcedDomain <- forceValue domain
+  case forcedDomain of
+    VMeta {} -> return $ blockOnMetas [forcedDomain]
+    _ -> case toTypeValue forcedDomain of
+      VNatType {} -> return Nothing
+      VTensorType tElem dims -> do
+        forcedElem <- forceValue tElem
+        forcedDims <- forceValue dims
+        case (forcedElem, forcedDims) of
+          (IRatType, INil _) -> return Nothing
+          (_, _) -> malformedConstraintError c
+      VIndexType size -> do
+        forcedValue <- forceValue value
+        case forcedValue of
+          VMeta {} -> return $ blockOnMetas [forcedValue]
+          INatLiteral n -> do
+            (sizeBlockingMetas, sizeLowerBound) <- findLowerBound ctx value size
+            if n < sizeLowerBound
+              then return Nothing
+              else
+                if not (MetaSet.null sizeBlockingMetas)
+                  then return $ Just sizeBlockingMetas
+                  else throwError $ TypingError $ FailedIndexConstraintTooBig ctx n sizeLowerBound
+          _ -> malformedConstraintError c
+      _ -> malformedConstraintError c
   where
     ctx = contextOf c
 solveInDomain c _ = malformedConstraintError c
 
-blockOnMetas :: [Value Builtin] -> Maybe MetaSet
+blockOnMetas :: [ForcedValue Builtin] -> Maybe MetaSet
 blockOnMetas args = do
   let metas = mapMaybe getNMeta args
   if null metas
     then Nothing
     else Just (MetaSet.fromList metas)
-
-getNMeta :: Value Builtin -> Maybe MetaID
-getNMeta = \case
-  VMeta m _ -> Just m
-  _ -> Nothing
+  where
+    getNMeta :: ForcedValue Builtin -> Maybe MetaID
+    getNMeta = \case
+      VMeta m _ -> Just m
+      _ -> Nothing
 
 findLowerBound ::
   forall m.
-  (MonadTypeChecker Builtin m) =>
+  (MonadTypeChecker Builtin m, MonadReadableNameContext m, TypableBuiltin Builtin) =>
   ConstraintContext Builtin ->
   VType Builtin ->
   VType Builtin ->
@@ -97,18 +103,20 @@ findLowerBound ::
 findLowerBound ctx value indexSize = go indexSize
   where
     go :: VType Builtin -> m (MetaSet, Int)
-    go = \case
-      VMeta m _ ->
-        return (MetaSet.singleton m, 0)
-      INatLiteral n ->
-        return (mempty, n)
-      VFreeVar {} ->
-        return (mempty, 0)
-      VBuiltin (BuiltinFunction (Add AddNat)) [argExpr -> e1, argExpr -> e2] -> do
-        (m1, b1) <- go e1
-        (m2, b2) <- go e2
-        return (m1 <> m2, b1 + b2)
-      _ -> throwError $ TypingError $ FailedIndexConstraintUnknown ctx value indexSize
+    go size = do
+      forcedSize <- forceValue size
+      case forcedSize of
+        VMeta m _ ->
+          return (MetaSet.singleton m, 0)
+        INatLiteral n ->
+          return (mempty, n)
+        VFreeVar {} ->
+          return (mempty, 0)
+        VBuiltin (BuiltinFunction (Add AddNat)) [argExpr -> e1, argExpr -> e2] -> do
+          (m1, b1) <- go e1
+          (m2, b2) <- go e2
+          return (m1 <> m2, b1 + b2)
+        _ -> throwError $ TypingError $ FailedIndexConstraintUnknown ctx value indexSize
 
 --------------------------------------------------------------------------------
 -- Default index constraints
@@ -127,13 +135,15 @@ solveDefaultIndexConstraint ::
   m Bool
 solveDefaultIndexConstraint (WithContext constraint ctx) = do
   case instanceGoal constraint of
-    (InstanceGoal [] (Right NatInDomainConstraint) [n, argExpr -> IIndexType size]) -> do
-      let succN = case argExpr n of
-            INatLiteral x -> INatLiteral (x + 1)
-            n' -> mkExpr accessAddNat (Op2Args n' (INatLiteral 1))
+    (InstanceGoal [] (Right NatInDomainConstraint) [argExpr -> value, argExpr -> typ]) -> do
+      forcedType <- runNameBoundContextT (namedBoundCtxOf ctx) $ forceValue typ
+      case forcedType of
+        IIndexType size -> do
+          let succN = Forced $ mkExpr accessAddNat (Op2Args value (Forced $ INatLiteral 1))
 
-      let constraintInfo = (ctx, instanceOrigin constraint)
-      newSizeConstraint <- createInstanceUnification constraintInfo size succN
-      addUnificationConstraints [newSizeConstraint]
-      return True
+          let constraintInfo = (ctx, instanceOrigin constraint)
+          newSizeConstraint <- createInstanceUnification constraintInfo size succN
+          addUnificationConstraints [newSizeConstraint]
+          return True
+        _ -> return False
     _ -> return False

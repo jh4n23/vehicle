@@ -7,12 +7,12 @@ import Data.List.NonEmpty
 import Data.Serialize (Serialize)
 import Data.Text (Text)
 import GHC.Generics (Generic)
+import Vehicle.Compile.Normalise.Core
 import Vehicle.Data.AST.Expr.Scoped
 import Vehicle.Data.Builtin.Interface
 import Vehicle.Data.Builtin.Interface.Normalise
 import Vehicle.Data.Builtin.Interface.Print
 import Vehicle.Data.Builtin.Standard.Core
-import Vehicle.Data.Code.Value (Value)
 import Vehicle.Data.DSL
 import Vehicle.Prelude
 
@@ -204,25 +204,23 @@ instance BuiltinHasIterate LinearityBuiltin where
 --------------------------------------------------------------------------------
 -- Printing
 
-instance ConvertableBuiltin LinearityBuiltin Builtin where
+instance PrintableBuiltin LinearityBuiltin where
   convertBuiltin p = \case
     LinearityConstructor c -> convertBuiltin p c
     LinearityFunction f -> convertBuiltin p f
     b -> cheatConvertBuiltin p $ pretty b
 
-instance PrintableBuiltin LinearityBuiltin where
-  coercionArgs = const Nothing
-  isDerivedBuiltin = const Nothing
-
 --------------------------------------------------------------------------------
 -- Normalisation
 
-instance NormalisableBuiltin Value LinearityBuiltin where
+instance NormalisableBuiltin LinearityBuiltin where
   evaluationScheme b = case b of
     LinearityFunction Iterate -> StandardEvaluation evalIterate
-    _ -> NoEvaluation
+    _ -> Unevaluable
 
-  isCast _ _ = Nothing
+  isCast _ = False
+
+  isDerivedBuiltin = const Nothing
 
 --------------------------------------------------------------------------------
 -- DSL

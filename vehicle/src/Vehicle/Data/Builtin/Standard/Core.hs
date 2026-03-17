@@ -151,10 +151,10 @@ instance BuiltinHasBoolLiterals Builtin where
         mkExpr = BuiltinConstructor . BoolTensorLiteral
       }
 
-  accessNotBuiltin = functionAccessor Not
-  accessAndBuiltin = functionAccessor And
-  accessOrBuiltin = functionAccessor Or
-  accessImpliesBuiltin = functionAccessor Implies
+  accessNotTensorBuiltin = functionAccessor Not
+  accessAndTensorBuiltin = functionAccessor And
+  accessOrTensorBuiltin = functionAccessor Or
+  accessImpliesTensorBuiltin = functionAccessor Implies
   accessReduceAndBuiltin = functionAccessor ReduceAndTensor
   accessReduceOrBuiltin = functionAccessor ReduceOrTensor
   accessIfBuiltin = functionAccessor If
@@ -341,18 +341,18 @@ builtinCast :: BuiltinCast -> DSLExpr Builtin
 builtinCast = builtin . BuiltinCast
 
 accessFromNatToIndex ::
-  (HasBuiltinConstructor expr) =>
-  Accessor (expr Builtin) (FromNatToIndexArgs (expr Builtin))
+  (HasBuiltinConstructor expr arg) =>
+  Accessor (expr Builtin) (FromNatToIndexArgs (arg Builtin))
 accessFromNatToIndex = accessArgs (castAccessor (FromNat FromNatToRat))
 
 accessFromNatToRat ::
-  (HasBuiltinConstructor expr) =>
-  Accessor (expr Builtin) (FromNatToSimpleArgs (expr Builtin))
+  (HasBuiltinConstructor expr arg) =>
+  Accessor (expr Builtin) (FromNatToSimpleArgs (arg Builtin))
 accessFromNatToRat = accessArgs (castAccessor (FromNat FromNatToIndex))
 
 accessFromVectorToList ::
-  (HasBuiltinConstructor expr) =>
-  Accessor (expr Builtin) (VectorToListArgs (expr Builtin))
+  (HasBuiltinConstructor expr arg) =>
+  Accessor (expr Builtin) (VectorToListArgs (arg Builtin))
 accessFromVectorToList = accessArgs (castAccessor FromVectorToList)
 
 isTensorType :: DSLExpr Builtin -> DSLExpr Builtin -> DSLExpr Builtin

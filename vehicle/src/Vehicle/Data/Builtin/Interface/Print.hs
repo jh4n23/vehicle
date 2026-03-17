@@ -1,75 +1,53 @@
 module Vehicle.Data.Builtin.Interface.Print where
 
-import Data.Maybe (isJust)
-import Vehicle.Data.AST.Expr.Scoped (Arg, Expr (..), mapBuiltins, normAppList, pattern App)
+import Vehicle.Data.AST.Expr.Desugared (Expr (..), pattern App)
 import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Prelude
 
 --------------------------------------------------------------------------------
 -- Conversion
 
-class ConvertableBuiltin builtin1 builtin2 where
-  convertBuiltin :: Provenance -> builtin1 -> Expr builtin2
-
-instance ConvertableBuiltin builtin builtin where
-  convertBuiltin = Builtin
-
-instance ConvertableBuiltin BuiltinType Builtin where
-  convertBuiltin p = Builtin p . BuiltinType
-
-instance ConvertableBuiltin TypeClassOp Builtin where
-  convertBuiltin p = Builtin p . TypeClassOp
-
-instance ConvertableBuiltin BuiltinConstructor Builtin where
-  convertBuiltin p = Builtin p . BuiltinConstructor
-
-instance ConvertableBuiltin BuiltinFunction Builtin where
-  convertBuiltin p = Builtin p . BuiltinFunction
-
-instance ConvertableBuiltin DerivedFunction Builtin where
-  convertBuiltin p = Builtin p . DerivedFunction
-
-instance ConvertableBuiltin ComparisonOp Builtin where
-  convertBuiltin p = convertBuiltin p . CompareTC
-
-convertExprBuiltins ::
-  forall builtin1 builtin2.
-  (ConvertableBuiltin builtin1 builtin2) =>
-  Expr builtin1 ->
-  Expr builtin2
-convertExprBuiltins = mapBuiltins $ \p b args ->
-  normAppList (convertBuiltin p b) args
-
 --------------------------------------------------------------------------------
 -- Printing
-
-class (Show builtin, Pretty builtin, ConvertableBuiltin builtin Builtin) => PrintableBuiltin builtin where
-  -- | Convert expressions with the builtin back to expressions with the standard
-  -- builtin type. Used for printing.
-  coercionArgs :: builtin -> Maybe ([Arg builtin] -> Expr builtin)
-
-  isDerivedBuiltin :: builtin -> Maybe Identifier
-
-isCoercionExpr :: (PrintableBuiltin builtin) => Expr builtin -> Bool
-isCoercionExpr = \case
-  Builtin _ b -> isJust $ coercionArgs b
-  App (Builtin _ b) _ -> isJust $ coercionArgs b
-  _ -> False
 
 -- | Use to convert builtins for printing that have no representation in the
 -- standard `Builtin` type.
 cheatConvertBuiltin :: Provenance -> Doc a -> Expr builtin
-cheatConvertBuiltin p b = FreeVar p $ stdlibIdentifier $ layoutAsText b
+cheatConvertBuiltin p b = Var p $ layoutAsText b
+
+class (Show builtin, Pretty builtin) => PrintableBuiltin builtin where
+  convertBuiltin :: Provenance -> builtin -> Expr Builtin
 
 instance PrintableBuiltin Builtin where
-  coercionArgs b = case b of
-    BuiltinCast FromNat {} -> Just $ \args -> argExpr $ last args
-    BuiltinCast FromRat {} -> Just $ \args -> argExpr $ last args
-    TypeClassOp FromNatTC {} -> Just $ \args -> argExpr $ last args
-    TypeClassOp FromRatTC {} -> Just $ \args -> argExpr $ last args
-    TypeClassOp VecLiteralTC {} -> Just $ \args -> normAppList (Builtin mempty b) args
-    _ -> Nothing
+  convertBuiltin = Builtin
 
-  isDerivedBuiltin b = case b of
-    DerivedFunction f -> Just $ identifierOf f
-    _ -> Nothing
+instance PrintableBuiltin BuiltinType where
+  convertBuiltin p = Builtin p . BuiltinType
+
+instance PrintableBuiltin TypeClassOp where
+  convertBuiltin p = Builtin p . TypeClassOp
+
+instance PrintableBuiltin BuiltinConstructor where
+  convertBuiltin p = Builtin p . BuiltinConstructor
+
+instance PrintableBuiltin BuiltinFunction where
+  convertBuiltin p = Builtin p . BuiltinFunction
+
+instance PrintableBuiltin DerivedFunction where
+  convertBuiltin p = Builtin p . DerivedFunction
+
+instance PrintableBuiltin ComparisonOp where
+  convertBuiltin p = convertBuiltin p . CompareTC
+
+convertBuiltins :: (PrintableBuiltin builtin) => Expr builtin -> Expr Builtin
+convertBuiltins expr = case expr of
+  Builtin p b -> convertBuiltin p b
+  App fun args -> App (convertBuiltins fun) (fmap (fmap convertBuiltins) args)
+  Pi p binder res -> Pi p (fmap convertBuiltins binder) $ convertBuiltins res
+  Let p bound binder body -> Let p (convertBuiltins bound) (fmap convertBuiltins binder) (convertBuiltins body)
+  Lam p binder body -> Lam p (fmap convertBuiltins binder) (convertBuiltins body)
+  Record p fs -> Record p (mapRecordFields convertBuiltins fs)
+  RecordAcc p r field -> RecordAcc p (convertBuiltins r) field
+  Universe p -> Universe p
+  Var p v -> Var p v
+  Hole p n -> Hole p n

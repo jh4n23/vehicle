@@ -8,13 +8,10 @@ where
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Traversable (for)
-import Vehicle.Compile.Normalise.NBE
+import Vehicle.Compile.Normalise.Core
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Type.Core
-import Vehicle.Compile.Type.Meta (findUltimateUnsolvedMeta)
-import Vehicle.Compile.Type.Meta.Variable (MetaVariableContext, findMetaInfo, metaCtx, metaSolution, metaType)
-import Vehicle.Data.Builtin.Interface.Normalise
-import Vehicle.Data.Code.Value
+import Vehicle.Compile.Type.Meta.Variable (MetaInfo (..), MetaVariableContext, findMetaInfo, metaCtx, metaSolution)
 import Vehicle.Data.Variable.Bound.Context.Generic
 import Vehicle.Data.Variable.Bound.Context.Name
 import Vehicle.Data.Variable.Free.Context
@@ -87,43 +84,14 @@ substMeta ctx s (p, m, mArgs) = do
   let metaInfo = findMetaInfo s m
   case metaSolution metaInfo of
     Nothing -> normAppList (Meta p m) <$> substMetasAt ctx s mArgs
-    Just value -> do
+    Just solution -> do
       let shiftLv = boundCtxLv ctx - boundCtxLv (metaCtx metaInfo)
-      let liftedValue = liftDBIndices shiftLv (unnormalised value)
+      let liftedValue = liftDBIndices shiftLv solution
       substMetasAt ctx s $ substArgs liftedValue mArgs
 
-instance MetaSubstitutable m builtin (Value builtin) where
-  substMetasAt ctx s expr = case expr of
-    VMeta m args -> do
-      let metaInfo = findMetaInfo s m
-      case metaSolution metaInfo of
-        -- TODO do we need to substitute through the args here?
-        Nothing -> VMeta m <$> substMetasAt ctx s args
-        Just value -> do
-          substValue <- substMetasAt ctx s $ normalised value
-          case args of
-            [] -> return substValue
-            (a : as) -> normaliseApp ctx substValue (a : as)
-    VUniverse {} -> return expr
-    VFreeVar v spine -> VFreeVar v <$> traverse (substMetasAt ctx s) spine
-    VBoundVar v spine -> VBoundVar v <$> traverse (substMetasAt ctx s) spine
-    VRecord ident fields -> VRecord ident <$> traverse (substMetasAt ctx s) fields
-    VRecordAcc recordType record field spine -> do
-      recordType' <- substMetasAt ctx s recordType
-      record' <- substMetasAt ctx s record
-      spine' <- traverse (substMetasAt ctx s) spine
-      return $ VRecordAcc recordType' record' field spine'
-    VBuiltin b spine -> do
-      spine' <- traverse (substMetasAt ctx s) spine
-      evalBuiltin ctx b spine'
-
-    -- NOTE: no need to lift the substitutions here as we're passing under the binders
-    -- because by construction every meta-variable solution is a closed term.
-    VLam binder body -> VLam <$> substMetasAt ctx s binder <*> substMetasAt (nameOf binder : ctx) s body
-    VPi binder body -> VPi <$> substMetasAt ctx s binder <*> substMetasAt (nameOf binder : ctx) s body
-
-instance MetaSubstitutable m builtin (Closure builtin) where
-  substMetasAt ctx s (Closure env body) = Closure <$> traverseEnv (substMetasAt ctx s) env <*> substMetasAt ctx s body
+{-
+----------------------------------------------------------------------------
+-- Free environments
 
 instance MetaSubstitutable m builtin (GluedExpr builtin) where
   substMetasAt ctx s (Glued a b) = Glued <$> substMetasAt ctx s a <*> substMetasAt ctx s b
@@ -148,6 +116,7 @@ instance MetaSubstitutable m builtin (InstanceConstraintOrigin builtin) where
   substMetasAt ctx s = \case
     InstanceTypeRestrictionOrigin t -> InstanceTypeRestrictionOrigin <$> substMetasAt ctx s t
     InstanceArgOrigin t -> InstanceArgOrigin <$> substMetasAt ctx s t
+-}
 
 --------------------------------------------------------------------------------
 -- Substitution operation

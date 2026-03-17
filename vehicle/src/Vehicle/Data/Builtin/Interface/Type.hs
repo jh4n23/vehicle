@@ -1,20 +1,21 @@
 module Vehicle.Data.Builtin.Interface.Type where
 
+import Data.Maybe (isJust)
 import Data.Proxy (Proxy)
+import Vehicle.Compile.Normalise.Core
 import Vehicle.Compile.Type.Core (InstanceHead)
-import Vehicle.Compile.Type.Monad.Class (MonadTypeChecker)
-import Vehicle.Data.AST.Expr.Scoped (Type)
+import Vehicle.Data.AST.Expr.Scoped (Arg, Expr (..), Type)
 import Vehicle.Data.Builtin.Interface
-import Vehicle.Data.Builtin.Interface.Normalise (NormalisableBuiltin)
 import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Code.DSL
 import Vehicle.Data.DSL
+import Vehicle.Data.Variable.Free.Context (MonadFreeContext)
 import Vehicle.Prelude (Provenance, Relevance (..))
 import Prelude hiding (iterate)
 
 class (NormalisableBuiltin builtin, Ord builtin) => TypableBuiltin builtin where
   -- | Construct a type for the builtin
-  typeBuiltin :: (MonadTypeChecker builtin m) => Provenance -> builtin -> m (Type builtin)
+  typeBuiltin :: (MonadFreeContext builtin m) => Provenance -> builtin -> m (Type builtin)
 
   -- | Can meta variables depend on other values in the scope?
   -- Efficiency hack for polarity/linearity subsystems.
@@ -25,6 +26,16 @@ class (NormalisableBuiltin builtin, Ord builtin) => TypableBuiltin builtin where
 
   -- | Is the builtin a constraint for a casting operation (e.g. of literals, tensors etc.)
   isCastConstraint :: InstanceHead builtin -> Bool
+
+  -- | Convert expressions with the builtin back to expressions with the standard
+  -- builtin type. Used for printing.
+  coercionArgs :: builtin -> Maybe ([Arg builtin] -> Expr builtin)
+
+isCoercionExpr :: (TypableBuiltin builtin) => Expr builtin -> Bool
+isCoercionExpr = \case
+  Builtin _ b -> isJust $ coercionArgs b
+  App (Builtin _ b) _ -> isJust $ coercionArgs b
+  _ -> False
 
 typeOfBuiltinType :: (HasStandardBuiltins builtin) => BuiltinType -> DSLExpr builtin
 typeOfBuiltinType = \case

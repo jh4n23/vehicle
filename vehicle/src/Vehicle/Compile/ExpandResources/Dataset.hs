@@ -4,7 +4,6 @@ module Vehicle.Compile.ExpandResources.Dataset
 where
 
 import Control.Monad.Except (MonadError (..))
-import Control.Monad.IO.Class (MonadIO)
 import System.FilePath (takeExtension)
 import Vehicle.Compile.Error
 import Vehicle.Compile.ExpandResources.Core
@@ -17,9 +16,9 @@ import Vehicle.Data.Code.Value
 -- Dataset parsing
 
 parseDataset ::
-  (MonadIO m, MonadExpandResources m) =>
+  (MonadExpandResources m) =>
   DeclProvenance ->
-  GluedType Builtin ->
+  Type Builtin ->
   FilePath ->
   m (Value Builtin)
 parseDataset decl@(ident, _) expectedType filePath = do
