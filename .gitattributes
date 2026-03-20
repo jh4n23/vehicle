@@ -1,3 +1,10 @@
 # The ormolu code formatter for Haskell requires `lf` line endings
 # https://github.com/tweag/ormolu#zap-beware-gits-coreautocrlf-on-windows-zap
 *.hs text eol=lf
+
+# Attempting to fix behaviour when running .golden tests
+*.golden text eol=lf
+
+# Denote all files that are truly binary and should not be modified.
+*.png binary
+*.jpg binary
