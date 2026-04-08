@@ -203,7 +203,7 @@ unblockNetworkApplication ::
 unblockNetworkApplication ident (NetworkAppArgs arg) = do
   -- this should not be 
   let name = nameOf ident
-  _ <- developerError "unblockNetworkApplication"
+  -- _ <- developerError "unblockNetworkApplication"
   networkInfo <- asks (lookupNetworkInfo name . networkCtx)
 
   (inputVarExpr, outputVarExpr) <- addNetworkApplicationToGlobalCtx name networkInfo arg

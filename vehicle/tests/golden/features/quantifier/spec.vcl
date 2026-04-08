@@ -20,4 +20,4 @@ f : Pair -> Pair
 
 @property
 parallel : Bool
-parallel = (forall x . f x > x)
+parallel = (forall x . (f x).a > 0)

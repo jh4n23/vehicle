@@ -207,14 +207,9 @@ compileQueries expr = do
       logDebug MaxDetail $ "negate" <+> pretty Forall
       negatedArgs <- negateQuantifierBody args
       compileQuantifiedQuerySet True negatedArgs
-    VQuantifyRecord (Exists, args) -> do
-      transformedArgs <- transformQuantifiedRecord args
-      compileQuantifiedQuerySet False transformedArgs
-    VQuantifyRecord (Forall, args) -> do
-      logDebug MaxDetail $ "negate" <+> pretty Forall
-      transformedArgs <- transformQuantifiedRecord args
-      negatedArgs <- negateQuantifierBody transformedArgs
-      compileQuantifiedQuerySet True negatedArgs
+    VQuantifyRecord (_q, args) -> do
+      transformedArgs <- transformQuantifiedRecord args -- (LAUREN) Is this where we would change to to \t -> h(fromTensor t) 
+      compileQuantifiedQuerySet False transformedArgs -- cant reform and call compileQueries - not proper context here
     ---------------------
     -- Recursive cases --
     ---------------------
