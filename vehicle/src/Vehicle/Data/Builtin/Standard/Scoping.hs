@@ -152,6 +152,19 @@ createValidNetworkIOInstance p recordIdent = do
 
   DefFunction p functionIdent (FunctionDecl 1 (Just (AnnInstance Nothing))) recordType functionBody
 
+createValidHasValidNonInferableParameterType ::
+  Provenance ->
+  Identifier ->
+  Decl Builtin
+createValidHasValidNonInferableParameterType p recordIdent = do
+  let recordType = fromDSL mempty $ freeVar validNetworkIOTypeIdent @@ [freeVar recordIdent]
+  let functionBody = Record p recordType []
+
+  let functionName = Text.pack "_" <> nameOf recordIdent <> "HasValidNetworkIOType"
+  let functionIdent = Identifier (modulePath recordIdent) functionName
+
+  DefFunction p functionIdent (FunctionDecl 1 (Just (AnnInstance Nothing))) recordType functionBody
+
 createTensorLikeHasQuantifierInstance ::
   Provenance ->
   Identifier ->

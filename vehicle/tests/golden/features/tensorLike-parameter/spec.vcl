@@ -5,4 +5,4 @@ record Pair where
   }
 
 @parameter
-p : Nat
+p : Pair
