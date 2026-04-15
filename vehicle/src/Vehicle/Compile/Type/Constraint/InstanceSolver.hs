@@ -33,7 +33,7 @@ runInstanceSolver ::
   InstanceSearchDepth ->
   m ()
 runInstanceSolver proxy depth = do
-  logCompilerSection2 MaxDetail "instance solver run" $
+  logCompilerSection2 MidDetail "instance solver run" $
     runConstraintSolver
       getActiveInstanceConstraints
       setInstanceConstraints
@@ -60,7 +60,7 @@ solveInstanceConstraint ::
   m ()
 solveInstanceConstraint depth constraint = do
   normConstraint <- substMetaVariables constraint
-  logDebug MaxDetail $ "Forced:" <+> prettyExternal normConstraint
+  logDebug MidDetail $ "Forced:" <+> prettyExternal normConstraint
 
   let goal = instanceGoal $ objectIn normConstraint
   candidateState <- getCurrentCandidateState normConstraint
@@ -75,7 +75,7 @@ solveInstanceGoal ::
   InstanceGoal builtin ->
   m ()
 solveInstanceGoal constraint (candidates, failedCandidates) depth goal = do
-  logDebug MaxDetail $
+  logDebug MidDetail $
     line
       <> "Candidates:"
       <> line
@@ -89,7 +89,7 @@ solveInstanceGoal constraint (candidates, failedCandidates) depth goal = do
   case successfulCandidates of
     -- If there is a single valid candidate then we adopt the resulting state
     [SuccessfulInstanceCandidate {..}] -> do
-      logDebug MaxDetail $ "Accepting only remaining candidate:" <+> squotes (prettyExternal successfulCandidate)
+      logDebug MidDetail $ "Accepting only remaining candidate:" <+> squotes (prettyExternal successfulCandidate)
       adoptHypotheticalState successfulState
 
     -- If there are no valid candidates then we fail.
@@ -107,14 +107,14 @@ solveInstanceGoal constraint (candidates, failedCandidates) depth goal = do
 
     -- Otherwise there are still multiple valid candidates so we're forced to block.
     _ -> do
-      logDebug MaxDetail $
+      logDebug MidDetail $
         "Multiple possible candidates:"
           <> lineIndent (vsep $ fmap (prettyExternal . successfulCandidate) successfulCandidates)
 
       -- Find most general candiate
       case findLeastGeneralCandidate successfulCandidates of
         Just SuccessfulInstanceCandidate {..} -> do
-          logDebug MaxDetail $ "Accepting least general candidate:" <+> squotes (prettyExternal successfulCandidate)
+          logDebug MidDetail $ "Accepting least general candidate:" <+> squotes (prettyExternal successfulCandidate)
           adoptHypotheticalState successfulState
         Nothing -> do
           -- Create the updated constraint
@@ -156,7 +156,7 @@ getInitialCandidateState constraint = do
   -- Candidates in bound context
   let candidatesInBoundCtx = getCandidatesInBoundCtx goal boundCtx
 
-  logDebug MaxDetail $
+  logDebug MidDetail $
     line
       <> "Builtin candidates:"
       <> line
@@ -216,10 +216,10 @@ checkCandidate ::
   m (Either (FailedInstanceCandidate builtin) (SuccessfulInstanceCandidate builtin))
 checkCandidate constraint goal depth candidate = do
   let candidateDoc = squotes (prettyExternal candidate)
-  logCompilerSection2 MaxDetail ("trying candidate instance" <+> candidateDoc) $ do
+  logCompilerSection2 MidDetail ("trying candidate instance" <+> candidateDoc) $ do
     result <- runTypeCheckerTHypothetically $ do
       instantiatedSolution <-
-        logCompilerSection MaxDetail "hypothetically accepting candidate" $
+        logCompilerSection MidDetail "hypothetically accepting candidate" $
           acceptCandidate constraint goal candidate
 
       -- Run the solvers to check for conflicts
@@ -233,11 +233,11 @@ checkCandidate constraint goal depth candidate = do
     case result of
       Left err -> do
         let vehicleError = formatCompileError err
-        logDebug MaxDetail $ line <> "Rejecting" <+> candidateDoc <+> "as a possibility"
-        logDebug MaxDetail $ indent 2 (pretty vehicleError) <> line
+        logDebug MidDetail $ line <> "Rejecting" <+> candidateDoc <+> "as a possibility"
+        logDebug MidDetail $ indent 2 (pretty vehicleError) <> line
         return $ Left (candidate, problem vehicleError)
       Right (instantiatedSolution, state) -> do
-        logDebug MaxDetail $ "Keeping" <+> candidateDoc <+> "as a possibility" <> line
+        logDebug MidDetail $ "Keeping" <+> candidateDoc <+> "as a possibility" <> line
         return $ Right $ SuccessfulInstanceCandidate candidate state instantiatedSolution
 
 acceptCandidate ::
@@ -278,7 +278,7 @@ instantiateCandidateTelescope ::
   m (Value builtin, Expr builtin)
 instantiateCandidateTelescope goalCtxExtension (constraintCtx, constraintOrigin) candidate = do
   let WithContext InstanceCandidate {..} candidateCtx = candidate
-  logCompilerSection MaxDetail "instantiating candidate telescope" $ do
+  logCompilerSection MidDetail "instantiating candidate telescope" $ do
     let initialCtx = goalCtxExtension ++ candidateCtx
     let createInstance relevance typ = do
           let newInfo = (setConstraintBoundCtx constraintCtx initialCtx, constraintOrigin)

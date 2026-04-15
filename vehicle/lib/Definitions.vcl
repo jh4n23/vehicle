@@ -199,19 +199,19 @@ realTensorHasComparison = { leTC = compareRatTensorReducedLe
 record HasValidNonInferableParameterType (t : Type) where {}
 
 @instance
-boolTensorHasValidNonInferableParameterType : (Tensor Bool dims)
+boolTensorHasValidNonInferableParameterType : HasValidNonInferableParameterType (Tensor Bool dims)
 boolTensorHasValidNonInferableParameterType = {}
 
 @instance
-ratTensorHasValidNonInferableParameterType : (Tensor Rat dims)
+ratTensorHasValidNonInferableParameterType : HasValidNonInferableParameterType (Tensor Real dims)
 ratTensorHasValidNonInferableParameterType = {}
 
 @instance
-natHasValidNonInferableParameterType : Nat
+natHasValidNonInferableParameterType : HasValidNonInferableParameterType Nat
 natHasValidNonInferableParameterType = {}
 
 @instance
-zeroDimTensorHasValidNonInferableParameterType : (Tensor Rat [])
+zeroDimTensorHasValidNonInferableParameterType : HasValidNonInferableParameterType (Tensor Real [])
 zeroDimTensorHasValidNonInferableParameterType = {}
 
 -- Inferrable parameter type
@@ -219,7 +219,7 @@ zeroDimTensorHasValidNonInferableParameterType = {}
 record HasValidInferableParameterType (t : Type) where {}
 
 @instance
-natHasValidInferableParameterType : Nat
+natHasValidInferableParameterType : HasValidInferableParameterType Nat
 natHasValidInferableParameterType = {}
 
 
