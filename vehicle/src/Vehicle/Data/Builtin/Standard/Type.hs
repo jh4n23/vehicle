@@ -74,7 +74,7 @@ typeOfTypeClass tc = case tc of
   HasRatLits -> type0 ~> type0
   HasVecLits {} -> tNat ~> (type0 ~> type0) ~> type0
   ValidPropertyType -> type0 ~> type0
-  ValidParameterType {} -> type0 ~> type0
+  -- ValidParameterType {} -> type0 ~> type0
   ValidNetworkTensorType -> type0 ~> type0
   ValidDatasetType -> type0 ~> type0
   ValidDatasetListElementType -> type0 ~> type0
@@ -176,7 +176,8 @@ restrictStandardDeclType declSort (ident, p) typ = do
   env <- getFreeCtx (Proxy @Builtin)
   let tc = case declSort of
         RestrictedProperty -> Builtin p (TypeClass ValidPropertyType)
-        RestrictedParameter s -> Builtin p (TypeClass (ValidParameterType s))
+        RestrictedParameter Inferable -> FreeVar p validInferableParameterTypeIdent
+        RestrictedParameter NonInferable -> FreeVar p validNonInferableParameterTypeIdent
         RestrictedDataset -> Builtin p (TypeClass ValidDatasetType)
         RestrictedNetwork -> FreeVar p validNetworkTypeIdent
 

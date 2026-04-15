@@ -5,7 +5,6 @@ import Data.Hashable (Hashable (..))
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import Prettyprinter (Pretty (..))
-import Vehicle.Data.AST.Decl (ParameterSort)
 import Vehicle.Data.Builtin.Core.BasicOperations
 
 --------------------------------------------------------------------------------
@@ -29,7 +28,8 @@ data TypeClass
     IsTensorType
   | -- Declaration type restrictions
     ValidPropertyType
-  | ValidParameterType ParameterSort
+  -- THIS ONE
+  -- | ValidParameterType ParameterSort
   | ValidNetworkTensorType
   | ValidDatasetType
   | ValidDatasetListElementType
@@ -60,7 +60,7 @@ instance Pretty TypeClass where
     HasForeach -> "HasForeach"
     IsTensorType -> "IsTensorType"
     ValidPropertyType -> "ValidPropertyType"
-    ValidParameterType {} -> "ValidParameterType"
+    -- ValidParameterType {} -> "ValidParameterType"
     ValidNetworkTensorType -> "ValidNetworkTensorType"
     ValidDatasetType -> "ValidDatasetType"
     ValidDatasetListElementType -> "ValidDatasetListElementType"

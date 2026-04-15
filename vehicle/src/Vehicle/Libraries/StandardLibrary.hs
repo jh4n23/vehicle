@@ -17,6 +17,8 @@ module Vehicle.Libraries.StandardLibrary
     hasMulIdent,
     hasDivIdent,
     hasComparisonIdent,
+    validInferableParameterTypeIdent,
+    validNonInferableParameterTypeIdent
   )
 where
 
@@ -66,6 +68,12 @@ validNetworkTypeIdent = standardLibIdent "HasValidNetworkType"
 
 validNetworkIOTypeIdent :: Identifier
 validNetworkIOTypeIdent = standardLibIdent "HasValidNetworkIOType"
+
+validInferableParameterTypeIdent :: Identifier
+validInferableParameterTypeIdent = standardLibIdent "HasValidInferableParameterType"
+
+validNonInferableParameterTypeIdent :: Identifier
+validNonInferableParameterTypeIdent = standardLibIdent "HasValidNonInferableParameterType"
 
 hasQuantifierIdent :: Identifier
 hasQuantifierIdent = standardLibIdent "HasQuantifier"

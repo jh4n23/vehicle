@@ -194,6 +194,35 @@ realTensorHasComparison = { leTC = compareRatTensorReducedLe
                           , neTC = compareRatTensorReducedNe
                           }
 
+-- Non-inferrable parameter type
+@typeclass
+record HasValidNonInferableParameterType (t : Type) where {}
+
+@instance
+boolTensorHasValidNonInferableParameterType : (Tensor Bool dims)
+boolTensorHasValidNonInferableParameterType = {}
+
+@instance
+ratTensorHasValidNonInferableParameterType : (Tensor Rat dims)
+ratTensorHasValidNonInferableParameterType = {}
+
+@instance
+natHasValidNonInferableParameterType : Nat
+natHasValidNonInferableParameterType = {}
+
+@instance
+zeroDimTensorHasValidNonInferableParameterType : (Tensor Rat [])
+zeroDimTensorHasValidNonInferableParameterType = {}
+
+-- Inferrable parameter type
+@typeclass
+record HasValidInferableParameterType (t : Type) where {}
+
+@instance
+natHasValidInferableParameterType : Nat
+natHasValidInferableParameterType = {}
+
+
 --------------------------------------------------------------------------------
 -- Loss logics
 --------------------------------------------------------------------------------

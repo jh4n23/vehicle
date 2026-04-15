@@ -50,31 +50,31 @@ allInstances =
           ------------------------------------
           -- ValidNonInferableParameterType --
           ------------------------------------
-          ( validNonInferableParameterType (tBoolTensor dimNil),
-            unitLit,
-            Nothing
-          ),
-          ( forAllIrrelevantNat "n" $ \n ->
-              validNonInferableParameterType (tIndex n),
-            irrelImplNatLam "n" $ \_n ->
-              unitLit,
-            Nothing
-          ),
-          ( validNonInferableParameterType tNat,
-            unitLit,
-            Nothing
-          ),
-          ( validNonInferableParameterType (tRatTensor dimNil),
-            unitLit,
-            Nothing
-          ),
+          -- ( validNonInferableParameterType (tBoolTensor dimNil),
+          --   unitLit,
+          --   Nothing
+          -- ),
+          -- ( forAllIrrelevantNat "n" $ \n ->
+          --     validNonInferableParameterType (tIndex n),
+          --   irrelImplNatLam "n" $ \_n ->
+          --     unitLit,
+          --   Nothing
+          -- ),
+          -- ( validNonInferableParameterType tNat,
+          --   unitLit,
+          --   Nothing
+          -- ),
+          -- ( validNonInferableParameterType (tRatTensor dimNil),
+          --   unitLit,
+          --   Nothing
+          -- ),
           ---------------------------------
           -- ValidInferableParameterType --
           ---------------------------------
-          ( validInferableParameterType tNat,
-            unitLit,
-            Nothing
-          ),
+          -- ( validInferableParameterType tNat,
+          --   unitLit,
+          --   Nothing
+          -- ),
           ----------------------
           -- ValidDatasetType --
           ----------------------
