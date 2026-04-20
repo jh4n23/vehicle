@@ -1,6 +1,8 @@
 module Vehicle.Compile.TypedView.Core where
 
 import GHC.Stack (HasCallStack)
+import Vehicle.Compile.Normalise.Core
+import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Prelude (Lv)
 import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Data.AST.Expr.Scoped
@@ -10,15 +12,12 @@ import Vehicle.Data.Code.Interface
 import Vehicle.Data.Code.Value
 import Vehicle.Data.Tensor
 import Vehicle.Prelude
-import Vehicle.Compile.Normalise.Core
-import Vehicle.Compile.Normalise.NBE
 
 -------------------------------------------------------------------------------
 -- Booleans
 
 -- | A view on all possible expressions that can have type `Bool` that we know how to compile
 -- to constraints.
-
 data CompilableBoolTensorExpr
   = VBoolTensorLiteral (Tensor Bool)
   | VBoolStackTensor (StackTensorArgs (Expr Builtin))
@@ -101,7 +100,9 @@ instance TypedEvalScheme NatExpr Builtin where
   handleRecord = Nothing
   handlePi = Nothing
   handleBoundVar = VNatBoundVar
-  handleFreeVar = VNatParameter
+  handleFreeVar ident spine = case spine of
+    [] -> VNatParameter ident
+    _ -> caseTypeError "FreeVar" "NatExpr"
   handleMeta = caseTypeError "MetaVar" "NatExpr"
   handleRecordAcc = caseTypeError "RecordAcc" "NatExpr"
 
@@ -145,13 +146,27 @@ data DimensionsExpr
   | VDimsIf (IfArgs (Expr Builtin))
   | VDimsBoundVar Lv (Spine Builtin)
 
+instance TypedEvalScheme DimensionsExpr Builtin where
+  handleUniverse = Nothing
+  handlePi = Nothing
+  handleLam = Nothing
+  handleRecord = Nothing
+  handleBoundVar = caseTypeError "BoundVar" "RatTensorExpr"
+  handleFreeVar ident spine = case spine of
+    (getExpr accessSpine -> Just args) -> VNetworkApplication ident args
+    [] -> VParameterOrDataset ident
+    _ -> caseTypeError "FreeVar" "RatTensorExpr"
+  handleMeta = caseTypeError "Meta" "RatTensorExpr"
+  handleRecordAcc = VRatTensorRecordAcc
+
+  handleBuiltin b spine = case normAppList (Builtin mempty b) spine of
+    (getExpr accessNil -> Just (NilArgs {})) -> VCompilableDimensionsExpr VDimsNil
+    (getExpr accessCons -> Just (ConsArgs _ x xs)) -> VCompilableDimensionsExpr $ VDimsCons x xs
+    (getExpr accessIf -> Just args) -> VDimsIf args
+    _ -> developerError $ "ill-typed RatTensor builtin:" <+> pretty b
+
 toDimensionsExpr :: (HasCallStack) => BoundEnv Builtin -> Expr Builtin -> m DimensionsExpr
-toDimensionsExpr e = case e of
-  VBoundVar lv spine -> VDimsBoundVar lv spine
-  (getExpr accessNil -> Just (NilArgs {})) -> VDimsNil
-  (getExpr accessCons -> Just (ConsArgs _ x xs)) -> VDimsCons x xs
-  (getExpr accessIf -> Just args) -> VDimsIf args
-  _ -> developerError $ "ill-typed Dimensions expression" <+> prettyVerbose e
+toDimensionsExpr e = _
 
 -------------------------------------------------------------------------------
 -- Rational Tensors
@@ -182,25 +197,22 @@ data RatTensorExpr
   | VNetworkApplication Identifier (NetworkAppArgs (Expr Builtin))
   | VParameterOrDataset Identifier
   | VRatTensorBoundVar Lv
+  | VRatTensorRecordAcc (Type Builtin) (RecordExpr Builtin) FieldName (Args Builtin)
 
 instance TypedEvalScheme RatTensorExpr Builtin where
   handleUniverse = Nothing
   handlePi = Nothing
   handleLam = Nothing
   handleRecord = Nothing
-  handleBoundVar lv args = VCompilableRatTensorValue _
+  handleBoundVar lv spine = case spine of
+    [] -> VRatTensorBoundVar lv
+    _ -> caseTypeError "BoundVar" "RatTensorExpr"
   handleFreeVar ident spine = case spine of
-    getExpr accessSpine -> Just networkArgs -> _
-    {-
-  case getExpr accessSpine spine of
-      Just args -> unblock status =<< unblockNetworkApp n args
-      -- Parameters and other scalar free vars may appear in constraints used
-      -- for quantifier-domain extraction, e.g. `-epsilon < x ! 0 < epsilon`.
-      _ -> return expr
-      -}
-
+    (getExpr accessSpine -> Just args) -> VNetworkApplication ident args
+    [] -> VParameterOrDataset ident
+    _ -> caseTypeError "FreeVar" "RatTensorExpr"
   handleMeta = caseTypeError "Meta" "RatTensorExpr"
-  handleRecordAcc = _
+  handleRecordAcc = VRatTensorRecordAcc
 
   handleBuiltin b spine = case normAppList (Builtin mempty b) spine of
     -- Compilable builtins

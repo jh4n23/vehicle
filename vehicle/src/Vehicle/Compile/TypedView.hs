@@ -1,10 +1,8 @@
 module Vehicle.Compile.TypedView
   ( TypeValue (..),
     toTypeValue,
-    toIndexValue,
     VectorValue (..),
     toVectorValue,
-    RatTensorValue (..),
     etaReduceTensor,
     mkIndexInto,
     accessQuantifierLambda,

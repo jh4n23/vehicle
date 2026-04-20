@@ -502,14 +502,14 @@ instance
 -- Value
 
 instance
-  ( PrettyUsing rest (Value builtin `In` ctx),
+  ( PrettyUsing rest (Thunk builtin `In` ctx),
     PrintableBuiltin builtin
   ) =>
   PrettyUsing rest (BoundEnv builtin `In` ctx)
   where
   prettyUsing (BoundEnv env, ctx) = prettyFlatList $ go env
     where
-      go :: GenericBoundCtx (GenericBinder (), Value builtin) -> [Doc a]
+      go :: GenericBoundCtx (GenericBinder (), Thunk builtin) -> [Doc a]
       go = \case
         [] -> []
         (binder, value) : rs -> do
