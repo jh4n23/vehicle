@@ -6,7 +6,6 @@ module Vehicle.Compile.Normalise.NBE
     forceThunk,
     forceClosure,
     extendClosureWithBound,
-    forceExpr,
     forceExprInEmptyEnv,
     findInstanceArg,
     evalBuiltinDetailed,
@@ -14,11 +13,11 @@ module Vehicle.Compile.Normalise.NBE
 where
 
 import Data.Data (Proxy (..))
-import Data.Map.Ordered.Strict qualified as OMap
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NonEmpty
 import GHC.Stack (HasCallStack)
 import Vehicle.Compile.Normalise.Core
 import Vehicle.Compile.Prelude
-import Vehicle.Compile.Print
 import Vehicle.Data.Builtin.Interface (Accessor (..))
 import Vehicle.Data.Code.Interface (IsArgs (..))
 import Vehicle.Data.Code.Value
@@ -28,12 +27,77 @@ import Vehicle.Data.Variable.Free.Context.Class (MonadFreeContext (..))
 -----------------------------------------------------------------------------
 -- Evaluation
 
+forceThunk ::
+  (TypedEvalScheme typedExpr builtin, MonadNorm builtin m) =>
+  Thunk builtin ->
+  m typedExpr
+forceThunk (Thunk env expr) = case expr of
+  Hole {} -> resolutionError currentPass "Hole"
+  Meta {} -> resolutionError currentPass "Meta"
+  Universe _ u -> case handleUniverse of
+    Just handler -> handler Proxy u
+    Nothing -> _
+  BoundVar _ v -> forceThunk $ lookupIxInEnv env v
+  FreeVar _ v -> forceThunk =<< lookupIdentValue v
+  Builtin _ b -> handleBuiltin b []
+  Lam _ binder body -> case handleLam of
+    Just handler -> handler binder body
+    Nothing -> _
+  Pi _ binder body -> case handlePi of
+    Just handler -> handler binder body
+    Nothing -> _
+  Let _ bound binder body -> do
+    let boundNormExpr = Thunk env bound
+    let newBoundEnv = extendEnvWithDefined boundNormExpr binder env
+    forceThunk $ Thunk newBoundEnv body
+  App fun args ->
+    forceApp env fun args
+  Record _p recordType fields -> case handleRecord of
+    Just handler -> handler recordType fields
+    Nothing -> _
+  --     let recordType' = thunkifyExpr env recordType
+  --     let fields' = mapRecordFields (thunkifyExpr env) fields
+  --     return $ VRecord recordType' $ OMap.fromList fields'
+  RecordProj _p recordType record field -> do
+    record' <- forceThunk $ Thunk env record
+    case record' of
+      VRecordRecord _ fields -> do
+        let fieldValue = lookupRecordField fields field
+        forceThunk $ Thunk env fieldValue
+      _ -> do
+        return $ handleRecordAcc recordType record' field []
+
+forceApp ::
+  (TypedEvalScheme typedExpr builtin, MonadNorm builtin m) =>
+  BoundEnv builtin ->
+  Expr builtin ->
+  NonEmpty (Arg builtin) ->
+  m typedExpr
+forceApp env fn args@(a :| as) = do
+  forcedFun <- forceThunk $ Thunk env fn
+  showAppExit $ case forcedFun of
+    VFunctionBuiltin b spine -> return $ handleBuiltin b (spine <> NonEmpty.toList args)
+    VFunctionFreeVar v spine -> return $ handleFreeVar v (spine <> NonEmpty.toList args)
+    VFunctionMeta v spine -> return $ handleMeta v (spine <> NonEmpty.toList args)
+    VFunctionBoundVar v spine -> return $ handleBoundVar v (spine <> NonEmpty.toList args)
+    VFunctionRecordAcc recordType record field spine -> return $ handleRecordAcc recordType record field (spine <> NonEmpty.toList args)
+    VFunctionLam binder closure
+      | not (visibilityMatches binder a) ->
+          visibilityError forcedFun a
+      | otherwise -> do
+          -- TODO force deeply?
+          let body = extendClosure closure binder (argExpr a)
+          case as of
+            a' : as' -> forceApp env body (a' :| as')
+            _ -> forceThunk body
+
 forceExprInEmptyEnv ::
   (MonadNorm builtin m) =>
   Expr builtin ->
   m (ForcedValue builtin)
-forceExprInEmptyEnv = forceExpr emptyBoundEnv
+forceExprInEmptyEnv = forceThunk $ Thunk emptyBoundEnv
 
+{-
 forceExpr ::
   (MonadNorm builtin m) =>
   BoundEnv builtin ->
@@ -106,10 +170,7 @@ forceApp fun args = do
       return result
   where
     unexpected name = unexpectedExprError currentPass (name <+> prettyVerbose args)
-
-forceThunk :: (MonadNorm builtin m) => Thunk builtin -> m (ForcedValue builtin)
-forceThunk (Thunk env builtin) = forceExpr env builtin
-
+-}
 forceClosure :: (MonadNorm builtin m) => VBinder builtin -> Closure builtin -> m (ForcedValue builtin)
 forceClosure binder closure = forceValue =<< extendClosureWithBound binder closure
 
@@ -159,11 +220,11 @@ evalBuiltinDetailed b spine = case evaluationScheme b of
   Unevaluable ->
     return DoesNotReduce
 
-lookupIdentValue :: forall builtin m. (MonadFreeContext builtin m) => Identifier -> m (Value builtin)
+lookupIdentValue :: forall builtin m. (MonadFreeContext builtin m) => Identifier -> m (Thunk builtin)
 lookupIdentValue ident = do
   decl <- getDeclEntry (Proxy @builtin) ident
   return $ case decl of
-    DefFunction _ _ _ _ value -> thunkifyExpr emptyBoundEnv value
+    DefFunction _ _ _ _ value -> Thunk emptyBoundEnv value
     _ -> Forced $ VFreeVar ident []
 
 findInstanceArg :: (MonadLogger m, Show op) => op -> [GenericArg a] -> m (a, [GenericArg a])
@@ -204,7 +265,7 @@ showExit ctx result = do
 showApp :: (MonadNorm builtin m) => ForcedValue builtin -> Spine builtin -> m ()
 showApp _ _ = return ()
 
-showAppExit :: (MonadNorm builtin m) => ForcedValue builtin -> m ()
+showAppExit :: (MonadNorm builtin m) => m typedExpr -> m typedExpr
 showAppExit _ = return ()
 
 {-
@@ -223,8 +284,8 @@ showAppExit _ctx result = do
 
 visibilityError ::
   (HasCallStack, MonadNorm builtin m) =>
-  ForcedValue builtin ->
-  VArg builtin ->
+  FunctionExpr builtin ->
+  Arg builtin ->
   m b
 visibilityError fun arg = do
   funDoc <- prettyFriendlyInCtx fun

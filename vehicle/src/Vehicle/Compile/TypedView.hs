@@ -4,8 +4,6 @@ module Vehicle.Compile.TypedView
     toIndexValue,
     VectorValue (..),
     toVectorValue,
-    toCompilableBoolValue,
-    BoolTensorValue (..),
     RatTensorValue (..),
     etaReduceTensor,
     mkIndexInto,
@@ -13,7 +11,6 @@ module Vehicle.Compile.TypedView
   )
 where
 
-import GHC.Stack (HasCallStack)
 import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Compile.TypedView.Core
@@ -91,6 +88,7 @@ toVectorValue value = case value of
 -------------------------------------------------------------------------------
 -- Bool
 
+{-
 toCompilableBoolValue :: (HasCallStack, MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m CompilableBoolTensorValue
 toCompilableBoolValue env expr = case expr of
   -- Compilable
@@ -109,7 +107,6 @@ toCompilableBoolValue env expr = case expr of
   (getExpr accessIf -> Just args) -> VBoolIf args
   _ -> developerError $ "ill-typed Bool expression:" <+> prettyVerbose expr
 
-{-
 fromComparison ::
   Either
     (ComparisonOp, TensorOp2Args (Value Builtin))
@@ -141,34 +138,6 @@ toComparison (op, TensorOp2Args dims e1 e2) = case matchDims dims of
     dimsError = developerError "unexpected comparison dimensions"
 -}
 -------------------------------------------------------------------------------
--- Tensor Rat
-
-toRatTensorValue :: (HasCallStack) => ForcedValue Builtin -> RatTensorValue
-toRatTensorValue expr = case expr of
-  VBoundVar lv [] -> VRatTensorBoundVar lv
-  VFreeVar n spine -> VRatTensorFreeVar n spine
-  (getExpr accessRatTensorLiteral -> Just t) -> VRatTensorLiteral t
-  (getExpr accessNegRatTensor -> Just args) -> VNegRatTensor args
-  (getExpr accessAddRatTensor -> Just args) -> VAddRatTensor args
-  (getExpr accessSubRatTensor -> Just args) -> VSubRatTensor args
-  (getExpr accessMulRatTensor -> Just args) -> VMulRatTensor args
-  (getExpr accessDivRatTensor -> Just args) -> VDivRatTensor args
-  (getExpr accessMinRatTensor -> Just args) -> VMinRatTensor args
-  (getExpr accessMaxRatTensor -> Just args) -> VMaxRatTensor args
-  (getExpr accessReduceAddRat -> Just args) -> VReduceAddRatTensor args
-  (getExpr accessReduceMulRat -> Just args) -> VReduceMulRatTensor args
-  (getExpr accessReduceMinRat -> Just args) -> VReduceMinRatTensor args
-  (getExpr accessReduceMaxRat -> Just args) -> VReduceMaxRatTensor args
-  (getExpr accessIf -> Just args) -> VIfRatTensor args
-  (getExpr accessConstTensor -> Just args) -> VRatConstTensor args
-  (getExpr accessStackTensor -> Just args) -> VRatStackTensor args
-  (getExpr accessAtTensor -> Just args) -> VRatAt args
-  (getExpr accessForeachTensor -> Just args) -> VRatForeach args
-  _ -> illTyped
-  where
-    illTyped = developerError $ "ill-typed RatTensor expression:" <+> pretty (show expr) -- rettyVerbose expr
-
--------------------------------------------------------------------------------
 -- Dim
 
 -- | Takes a `X` and [i_1, ... i_n] and returns `X ! i_1 ! i_n`
@@ -194,7 +163,7 @@ mkIndexInto elementType value shape indices = go value (zip shape indices)
                       atFirstDim = Forced $ INatLiteral d,
                       atRemainingDims = mkDims $ fmap fst xs,
                       atTensor = tensor,
-                      atIndex = Forced $ IIndexLiteral i
+                      atIndex = Forced $ IIndexLiteral i (Forced $ INatLiteral d)
                     }
         go result xs
 
@@ -216,7 +185,7 @@ etaReduceTensor typ dim dims tensor = do
             atFirstDim = Forced $ INatLiteral dim,
             atRemainingDims = dims,
             atTensor = tensor,
-            atIndex = Forced $ IIndexLiteral i
+            atIndex = Forced $ IIndexLiteral i (Forced $ INatLiteral dim)
           }
   let mkAt i = unforcedBuiltinApp accessAtTensorBuiltin (mkAtArgs i)
   fmap mkAt [0 .. (dim - 1)]

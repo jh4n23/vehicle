@@ -535,7 +535,7 @@ unoptimisedEvalAtTensor (AtTensorArgs _t _d ds tensor index) = do
       m (BuiltinEvaluationResult Value ForcedValue builtin)
     goLiterals ftensor findex literals = case literals of
       Wrapper Access {..} : remainingLiterals -> case (findex, getExpr ftensor) of
-        (IIndexLiteral i, Just xs) -> return $ Evaluated $ Forced $ mkExpr (xs `at` i)
+        (IIndexLiteral i _, Just xs) -> return $ Evaluated $ Forced $ mkExpr (xs `at` i)
         _ -> goLiterals ftensor findex remainingLiterals
       _ -> return $ Unevaluated [ftensor, findex]
 

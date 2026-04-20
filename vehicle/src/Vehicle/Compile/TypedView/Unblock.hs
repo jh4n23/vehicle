@@ -29,6 +29,18 @@ data UnblockingActions m = UnblockingActions
     unblockNetworkApp :: Identifier -> NetworkAppArgs (Expr Builtin) -> m (Expr Builtin)
   }
 
+-------------------------------------------------------------------------------
+-- Unsupported
+
+data IfTree a
+  = IfTree (Expr Builtin) (IfTree a) (IfTree a)
+  | IfLeaf a
+
+forIfTreeM :: (Monad m) => IfTree a -> (a -> m (IfTree b)) -> m (IfTree b)
+forIfTreeM tree f = case tree of
+  IfLeaf v -> f v
+  IfTree c t1 t2 -> IfTree c <$> forIfTreeM t1 f <*> forIfTreeM t2 f
+
 -- | Lifts all `if`s in the provided expression `e` to the top-level, while
 -- preserving the guarantee that the expression is normalised as much as
 -- possible.

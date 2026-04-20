@@ -52,7 +52,7 @@ import Vehicle.Prelude
 -- | The information stored for each variable in the environment. We choose
 -- to store the binder as it's a convenient mechanism for passing through
 -- name, relevance for pretty printing and debugging.
-type EnvEntry builtin = Value builtin
+type EnvEntry builtin = Thunk builtin
 
 unbound :: Lv -> EnvEntry builtin
 unbound lv = Forced $ VBoundVar lv []
@@ -65,7 +65,7 @@ newtype BoundEnv builtin = BoundEnv
 emptyBoundEnv :: BoundEnv builtin
 emptyBoundEnv = BoundEnv mempty
 
-lookupIxInEnv :: BoundEnv builtin -> Ix -> Value builtin
+lookupIxInEnv :: BoundEnv builtin -> Ix -> Thunk builtin
 lookupIxInEnv (BoundEnv env) i = snd $ lookupIxInBoundCtx i env
 
 -- | Note that the `ctxSize` must come from the current context and not a
@@ -80,7 +80,7 @@ extendEnvWithBound ctxSize binder (BoundEnv env) =
   BoundEnv $ (void binder, unbound ctxSize) : env
 
 extendEnvWithDefined ::
-  Value builtin ->
+  Thunk builtin ->
   GenericBinder expr ->
   BoundEnv builtin ->
   BoundEnv builtin
@@ -132,9 +132,9 @@ thunkifyArgs env = fmap (thunkifyArg env) . NonEmpty.toList
 data Closure builtin = Closure (BoundEnv builtin) (Expr builtin)
   deriving (Show, Generic, Eq, Ord)
 
-extendClosure :: Closure builtin -> VBinder builtin -> Value builtin -> Value builtin
+extendClosure :: Closure builtin -> VBinder builtin -> Expr builtin -> Thunk builtin
 extendClosure (Closure env expr) binder value =
-  Unforced $ Thunk (extendEnvWithDefined value binder env) expr
+  Thunk (extendEnvWithDefined value binder env) expr
 
 -----------------------------------------------------------------------------
 -- Normalised expressions
