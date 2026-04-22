@@ -250,12 +250,7 @@ delabBuiltinFunction fun args = case fun of
   V.Max _dom -> delabApp (B.Max tokMax) args
   V.QuantifyRatTensor q -> delabQuantifier q args
   V.QuantifyTensorLike q -> delabQuantifier q args
-  V.CompareRatTensorPointwise V.Eq -> delabInfixOp2 B.EqPoint tokEqPoint args
-  V.CompareRatTensorPointwise V.Ne -> delabInfixOp2 B.NePoint tokNePoint args
-  V.CompareRatTensorPointwise V.Le -> delabInfixOp2 B.LePoint tokLePoint args
-  V.CompareRatTensorPointwise V.Lt -> delabInfixOp2 B.LtPoint tokLtPoint args
-  V.CompareRatTensorPointwise V.Ge -> delabInfixOp2 B.GePoint tokGePoint args
-  V.CompareRatTensorPointwise V.Gt -> delabInfixOp2 B.GtPoint tokGtPoint args
+  V.CompareRatTensor op -> delabTensorComparison op args
   V.CompareIndex op -> delabTypeClassOp (V.CompareTC op) args
   V.CompareNat op -> delabTypeClassOp (V.CompareTC op) args
   V.FoldList -> delabTypeClassOp V.FoldTC args
@@ -356,6 +351,29 @@ delabInfixOp2 op tk args@[arg1, arg2]
 delabInfixOp2 _op tk args
   | null args = delabApp (cheatDelab $ "(" <> tkSymbol tk <> ")") []
   | otherwise = delabApp (cheatDelab $ tkSymbol tk) args
+
+delabTensorComparison :: (MonadDelab m) => V.ComparisonOp -> [V.Arg V.Builtin] -> m B.Expr
+delabTensorComparison op [dims1, dims2, xs, ys] = do
+  pointwiseDims <- delabM $ argExpr dims1
+  reducedDims <- delabM $ argExpr dims2
+  let args = [xs, ys]
+  case (pointwiseDims, reducedDims) of
+    (B.Nil {}, _) -> case op of
+      V.Eq -> delabInfixOp2 B.EqPoint tokEqPoint args
+      V.Ne -> delabInfixOp2 B.NePoint tokNePoint args
+      V.Le -> delabInfixOp2 B.LePoint tokLePoint args
+      V.Lt -> delabInfixOp2 B.LtPoint tokLtPoint args
+      V.Ge -> delabInfixOp2 B.GePoint tokGePoint args
+      V.Gt -> delabInfixOp2 B.GtPoint tokGtPoint args
+    (_, B.Nil {}) -> case op of
+      V.Eq -> delabInfixOp2 B.Eq tokEq args
+      V.Ne -> delabInfixOp2 B.Ne tokNe args
+      V.Le -> delabInfixOp2 B.Le tokLe args
+      V.Lt -> delabInfixOp2 B.Lt tokLt args
+      V.Ge -> delabInfixOp2 B.Ge tokGe args
+      V.Gt -> delabInfixOp2 B.Gt tokGt args
+    _ -> delabApp (cheatDelab $ "compareTensor" <> layoutAsText (pretty op)) args
+delabTensorComparison op args = delabApp (cheatDelab $ "compareTensor" <> layoutAsText (pretty op)) args
 
 delabIf :: (MonadDelab m) => [V.Arg V.Builtin] -> m B.Expr
 delabIf args@[arg1, arg2, arg3]

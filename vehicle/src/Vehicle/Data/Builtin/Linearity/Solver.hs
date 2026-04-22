@@ -8,7 +8,7 @@ import Vehicle.Compile.Error
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Type.Constraint.Core
 import Vehicle.Compile.Type.Core
-import Vehicle.Compile.Type.Monad (MonadTypeChecker, deepForceValue)
+import Vehicle.Compile.Type.Monad (MonadTypeChecker)
 import Vehicle.Compile.Type.System
 import Vehicle.Data.Builtin.Core
 import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin)

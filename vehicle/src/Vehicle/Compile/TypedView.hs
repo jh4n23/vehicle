@@ -1,7 +1,5 @@
 module Vehicle.Compile.TypedView
-  ( TypeValue (..),
-    toTypeValue,
-    VectorValue (..),
+  ( VectorValue (..),
     toVectorValue,
     etaReduceTensor,
     mkIndexInto,
@@ -9,9 +7,7 @@ module Vehicle.Compile.TypedView
   )
 where
 
-import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Print (prettyVerbose)
-import Vehicle.Compile.TypedView.Core
 import Vehicle.Data.AST.Expr.Scoped
 import Vehicle.Data.Builtin.Interface (Accessor (..), BuiltinHasIndexLiterals, BuiltinHasListLiterals, BuiltinHasNatLiterals, BuiltinHasNatType, BuiltinHasTensors (accessAtTensorBuiltin))
 import Vehicle.Data.Builtin.Interface.Normalise (HasTensorLiterals, unforcedBuiltinApp)
@@ -22,46 +18,6 @@ import Vehicle.Data.Code.Value
 import Vehicle.Data.Tensor
 import Vehicle.Data.Variable.Bound.Level
 import Vehicle.Prelude
-
--------------------------------------------------------------------------------
--- Types
-
--- | A view on all possible expressions that can have type `List Int`.
-data TypeValue
-  = VUnitType
-  | VBoolType
-  | VIndexType (Expr Builtin)
-  | VNatType
-  | VRatType
-  | VTensorType (Expr Builtin) (Expr Builtin)
-  | VListType (Expr Builtin)
-  | VVectorType (Expr Builtin) (Expr Builtin)
-  | VPiType (Binder Builtin) (Expr Builtin)
-  | VBoundTypeVar Lv (Args Builtin)
-  | VFreeTypeVar Identifier (Args Builtin)
-
-toTypeValue :: (MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m TypeValue
-toTypeValue env t = case t of
-  Pi _ binder body -> return $ VPiType binder body
-  FreeVar p v -> _
-  App fn args -> _
-  Builtin p b -> return $ builtinToTypeValue b []
-  _ -> illTyped
-  where
-    builtinToTypeValue :: Builtin -> Args Builtin -> TypeValue
-    builtinToTypeValue b args = case (b, args) of
-      (BuiltinType UnitType, []) -> VUnitType
-      (BuiltinType BoolType, []) -> VBoolType
-      (BuiltinType RatType, []) -> VRatType
-      (BuiltinType IndexType, [n]) -> VIndexType (argExpr n)
-      (BuiltinType NatType, []) -> VNatType
-      (BuiltinType ListType, [tElem]) -> VListType (argExpr tElem)
-      (BuiltinType TensorType, [tElem, ds]) -> VTensorType (argExpr tElem) (argExpr ds)
-      (BuiltinType VectorType, [tElem, dim]) -> VVectorType (argExpr tElem) (argExpr dim)
-      _ -> illTyped
-
-    illTyped :: a
-    illTyped = developerError $ "ill-typed type" <+> prettyVerbose t
 
 -------------------------------------------------------------------------------
 -- Vector

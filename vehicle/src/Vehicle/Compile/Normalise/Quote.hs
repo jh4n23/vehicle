@@ -54,10 +54,6 @@ instance Quote (Value builtin) (Expr builtin) where
   quote p lv = \case
     Forced value -> quote p lv value
     Unforced env -> quote p lv env
-    UnforcedApp fn args -> do
-      let fn' = quote p lv fn
-      let xs' = fmap (quote p lv) args
-      normAppList fn' xs'
 
 instance Quote (ForcedValue builtin) (Expr builtin) where
   quote p level = \case

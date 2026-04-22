@@ -53,37 +53,38 @@ class (PrintableBuiltin builtin) => NormalisableBuiltin builtin where
   isCast :: builtin -> Bool
   isDerivedBuiltin :: builtin -> Maybe Identifier
 
-class TypedEvalScheme expr builtin where
-  handleUniverse :: Maybe (Proxy builtin -> UniverseLevel -> expr)
-  handlePi :: Maybe (Binder builtin -> Expr builtin -> expr)
-  handleLam :: Maybe (Binder builtin -> Expr builtin -> expr)
-  handleRecord :: Maybe (Expr builtin -> RecordFields builtin -> expr)
-  handleBoundVar :: Lv -> Args builtin -> expr
-  handleFreeVar :: Identifier -> Args builtin -> expr
-  handleBuiltin :: builtin -> Args builtin -> expr
-  handleMeta :: MetaID -> Args builtin -> expr
-  handleRecordAcc :: Type builtin -> RecordExpr builtin -> FieldName -> Args builtin -> expr
+class (Monad m) => TypedEvalScheme expr builtin m where
+  forceBuiltin :: builtin -> Args builtin -> m expr
+  forceMeta :: MetaID -> Args builtin -> m expr
+
+  handleUniverse :: Proxy builtin -> Maybe (UniverseLevel -> m expr)
+  handleBoundVar :: Lv -> Args builtin -> m expr
+  handlePi :: Maybe (Binder builtin -> Closure builtin -> m expr)
+  handleLam :: Maybe (Binder builtin -> Closure builtin -> m expr)
+  handleRecord :: Maybe (Expr builtin -> RecordFields builtin -> m expr)
+  handleFreeVar :: Identifier -> Args builtin -> m expr
+  handleRecordAcc :: Type builtin -> RecordExpr builtin -> FieldName -> Args builtin -> m expr
 
 -------------------------------------------------------------------------------
 -- Functions
 
 data FunctionExpr builtin
-  = VFunctionLam (Binder builtin) (Expr builtin)
+  = VFunctionLam (Binder builtin) (Closure builtin)
   | VFunctionBuiltin builtin (Args builtin)
   | VFunctionFreeVar Identifier (Args builtin)
   | VFunctionMeta MetaID (Args builtin)
   | VFunctionBoundVar Lv (Args builtin)
   | VFunctionRecordAcc (Type builtin) (RecordExpr builtin) FieldName (Args builtin)
 
-instance TypedEvalScheme (FunctionExpr builtin) builtin where
-  handleUniverse = Nothing
+instance TypedEvalScheme (FunctionExpr builtin) builtin m where
+  forceBuiltin b args = return $ VFunctionBuiltin b args
+  forceMeta m args = return $ VFunctionMeta m args
+  handleUniverse _ = Nothing
   handleRecord = Nothing
   handlePi = Nothing
   handleLam = Just VFunctionLam
   handleBoundVar = VFunctionBoundVar
   handleFreeVar = VFunctionFreeVar
-  handleBuiltin = VFunctionBuiltin
-  handleMeta = VFunctionMeta
   handleRecordAcc = VFunctionRecordAcc
 
 -------------------------------------------------------------------------------
@@ -97,13 +98,13 @@ data RecordExpr builtin
   | VRecordBoundVar Lv (Args builtin)
   | VRecordRecordAcc (Type builtin) (RecordExpr builtin) FieldName (Args builtin)
 
-instance TypedEvalScheme (RecordExpr builtin) builtin where
+instance TypedEvalScheme (RecordExpr builtin) builtin m where
+  forceBuiltin b args = return $ VRecordBuiltin b args
+  forceMeta m args = return $ VRecordMeta m args
   handleBoundVar = VRecordBoundVar
   handleFreeVar = VRecordFreeVar
-  handleBuiltin = VRecordBuiltin
-  handleMeta = VRecordMeta
   handleRecord = Just VRecordRecord
   handleRecordAcc = VRecordRecordAcc
   handlePi = Nothing
-  handleUniverse = Nothing
+  handleUniverse _ = Nothing
   handleLam = Nothing

@@ -56,7 +56,7 @@ instance NormalisableBuiltin Builtin where
     BuiltinFunction f -> case f of
       CompareIndex op -> StandardEvaluation (evalCompareIndex op)
       CompareNat op -> StandardEvaluation (evalCompareNat op)
-      CompareRatTensorPointwise op -> StandardEvaluation (evalCompareRatTensorPointwise op)
+      CompareRatTensor op -> StandardEvaluation (evalCompareRatTensor op)
       Not -> StandardEvaluation evalNot
       And -> StandardEvaluation evalAnd
       Or -> StandardEvaluation evalOr

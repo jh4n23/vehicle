@@ -4,8 +4,8 @@ module Vehicle.Data.Builtin.Interface.Normalise where
 
 import Control.Applicative ((<|>))
 import Data.Bifunctor (Bifunctor (..))
-import Vehicle.Compile.Normalise.Core (BuiltinEvaluationResult (..))
-import Vehicle.Compile.Normalise.NBE (MonadNorm, forceValue)
+import Vehicle.Compile.Normalise.Core (BuiltinEvaluationResult (..), TypedEvalScheme (..))
+import Vehicle.Compile.Normalise.NBE (MonadNorm)
 import Vehicle.Compile.Prelude
 import Vehicle.Data.Builtin.Core
 import Vehicle.Data.Builtin.Interface
@@ -62,7 +62,7 @@ unforcedBuiltinApp ::
   args (Value builtin) ->
   Value builtin
 unforcedBuiltinApp accessBuiltin args =
-  UnforcedApp (Forced $ VBuiltin (mkExpr accessBuiltin ()) []) (mkExpr accessSpine args)
+  forceBuiltin (mkExpr accessBuiltin ()) (mkExpr accessSpine args)
 
 --------------------------------------------------------------------------------
 -- Blocking
@@ -409,20 +409,26 @@ evalReduceMinRatTensor = evalReduceTensor accessReduceMinRatBuiltin accessMinRat
 evalReduceMaxRatTensor :: (MonadNorm builtin m, HasRatExpr ForcedValue Value builtin, PrintableBuiltin builtin) => BuiltinEvaluation TensorReductionArgs builtin m
 evalReduceMaxRatTensor = evalReduceTensor accessReduceMaxRatBuiltin accessMaxRatTensorBuiltin accessRatTensorLiteral max
 
-evalCompareRatTensorPointwise ::
+evalCompareRatTensor ::
   (MonadNorm builtin m, HasBoolExpr ForcedValue Value builtin, HasRatExpr ForcedValue Value builtin, PrintableBuiltin builtin) =>
   ComparisonOp ->
-  BuiltinEvaluation TensorOp2Args builtin m
-evalCompareRatTensorPointwise op =
-  evalHeteroTensorOp2
-    (applyAccessor accessCompareRatTensorPointwiseBuiltin op)
-    accessRatTensorLiteral
-    accessBoolTensorLiteral
-    (comparisonOp op)
-    Nothing
-    Nothing
-    Nothing
-    Nothing
+  BuiltinEvaluation TensorComparisonArgs builtin m
+evalCompareRatTensor op (TensorComparisonArgs pointwiseDims flattenedDims _ _) = do
+  forcedDims <- forceValue pointwiseDims
+  case forcedDims of
+    ICons _ _ _ -> evalHeteroTensorOp2 _ accessRatTensorLiteral accessBoolTensorLiteral _ _ _ _ _ _
+    INil _ -> _
+    _ -> return $ Unevaluated [forcedDims]
+
+-- evalHeteroTensorOp2
+--   (applyAccessor accessCompareRatTensorPointwiseBuiltin op)
+--   accessRatTensorLiteral
+--   accessBoolTensorLiteral
+--   (comparisonOp op)
+--   Nothing
+--   Nothing
+--   Nothing
+--   Nothing
 
 -----------------------------------------------------------------------------
 -- Generic vector operations

@@ -35,7 +35,6 @@ module Vehicle.Compile.Type.Monad
     logUnsolvedUnknowns,
     findFirstConstraint,
     checkAllConstraintsSolved,
-    deepForceValue,
   )
 where
 
@@ -49,7 +48,6 @@ import Data.Maybe (isJust)
 import Data.Proxy (Proxy (..))
 import Vehicle.Compile.Error (CompileError (..), TypingError (..), compilerDeveloperError)
 import Vehicle.Compile.Normalise.Core
-import Vehicle.Compile.Normalise.NBE (forceValue)
 import Vehicle.Compile.Normalise.Quote (Quote (..), unnormalise)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (PrettyExternal, prettyExternal, prettyVerbose)
@@ -434,15 +432,16 @@ instantiateTelescope createFreshInstance boundCtx (telescopeType, telescopeBody)
               freshMetaExpr (provenanceOf piBinder) binderType boundCtx
             Instance {} -> do
               lift $ createFreshInstance (relevanceOf piBinder) binderType
-          let normNewArg = _
-          let resultType = extendClosure piClosure piBinder normNewArg
-          let resultBody = extendClosure lamClosure lamBinder normNewArg
+          let normNewArg = newArg
+          let resultType = Unforced $ extendClosure piClosure piBinder normNewArg
+          let resultBody = Unforced $ extendClosure lamClosure lamBinder normNewArg
           (typ', body', args) <- addNameToContext piBinder $ go (resultType, resultBody)
           return (typ', body', argFromBinder unnormPiBinder newArg : args)
         _ -> do
           let finalBody = unnormalise lv value
           return (typ, finalBody, [])
 
+{-
 deepForceValue :: (MonadTypeChecker builtin m) => Value builtin -> m (ForcedValue builtin, MetaSet)
 deepForceValue value = do
   forcedValue <- forceValue value
@@ -454,3 +453,4 @@ deepForceForcedValue = \case
   VBuiltin b spine -> _
   VRecordAcc b _ _ _ -> _
   value -> return value
+-}

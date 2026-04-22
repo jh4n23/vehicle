@@ -161,10 +161,6 @@ descopeValue ::
 descopeValue f = \case
   Forced value -> descopeForcedValue f value
   Unforced thunk -> descopeThunk f thunk
-  UnforcedApp fun args -> do
-    fun' <- descopeValue f fun
-    args' <- descopeSpine f args
-    return $ S.normAppList fun' args'
 
 -- | This function is not meant to do anything sensible and is merely
 -- used for printing `WHNF`s in a readable form.
@@ -210,9 +206,11 @@ cheatEnvToValues :: BoundEnv builtin -> GenericBoundCtx (Value builtin)
 cheatEnvToValues (BoundEnv env) = fmap entryToValue env
   where
     entryToValue :: (GenericBinder (), EnvEntry builtin) -> Value builtin
-    entryToValue (binder, value) = do
+    entryToValue (binder, entry) = do
       let ident = stdlibIdentifier (fromMaybe "_" (nameOf binder) <> " =")
-      let arg = explicit value
+      let arg = explicit $ case entry of
+            Bound value -> Unforced value
+            Unbound lv -> Forced $ VBoundVar lv []
       Forced $ VFreeVar ident [arg]
 
 descopeSpine :: (MonadNameContext m, PrintableBuiltin builtin) => VarStrategy -> Spine builtin -> m [S.Arg builtin]

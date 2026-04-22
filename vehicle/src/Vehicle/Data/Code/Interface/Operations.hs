@@ -93,10 +93,6 @@ type NatComparisonAccessor expr arg op = Accessor expr (op, Op2Args arg)
 
 type IndexComparisonAccessor expr arg op = Accessor expr (op, IndexComparisonArgs arg)
 
-type RatTensorPointwiseComparisonAccessor expr arg op = Accessor expr (op, TensorOp2Args arg)
-
-type RatTensorReducedComparisonAccessor expr arg op = Accessor expr (op, TensorReduceComparisonArgs arg)
-
 type Op1Accessor expr arg = Accessor expr (Op1Args arg)
 
 type Op2Accessor expr arg = Accessor expr (Op2Args arg)
@@ -155,11 +151,8 @@ accessCompareIndex = accessOpAndArgs accessCompareIndexBuiltin
 accessCompareNat :: (HasBoolExpr expr arg builtin) => NatComparisonAccessor (expr builtin) (arg builtin) ComparisonOp
 accessCompareNat = accessOpAndArgs accessCompareNatBuiltin
 
-accessCompareRatTensorPointwise :: (HasBoolExpr expr arg builtin) => RatTensorPointwiseComparisonAccessor (expr builtin) (arg builtin) ComparisonOp
-accessCompareRatTensorPointwise = accessOpAndArgs accessCompareRatTensorPointwiseBuiltin
-
-accessCompareRatTensorReduced :: (HasBoolExpr expr arg builtin) => RatTensorReducedComparisonAccessor (expr builtin) (arg builtin) ComparisonOp
-accessCompareRatTensorReduced = accessOpAndArgs accessCompareRatTensorReducedBuiltin
+accessCompareRatTensor :: (HasBoolExpr expr arg builtin) => Accessor (expr builtin) (ComparisonOp, TensorComparisonArgs (arg builtin))
+accessCompareRatTensor = accessOpAndArgs accessCompareRatTensorBuiltin
 
 accessQuantifyRatTensor :: (HasBoolExpr expr arg builtin) => Accessor (expr builtin) (Quantifier, QuantifyRatTensorArgs (arg builtin))
 accessQuantifyRatTensor = accessOpAndArgs accessQuantifyRatTensorBuiltin

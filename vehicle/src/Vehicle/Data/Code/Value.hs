@@ -1,6 +1,6 @@
 module Vehicle.Data.Code.Value
   ( BoundEnv (..),
-    EnvEntry,
+    EnvEntry (..),
     lookupIxInEnv,
     boundContextToEnv,
     namedBoundContextToEnv,
@@ -35,7 +35,7 @@ import Data.Bifunctor (Bifunctor (..))
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
 import GHC.Generics
-import Vehicle.Data.AST.Expr.Scoped (Arg, Binder, Expr)
+import Vehicle.Data.AST.Expr.Scoped (Arg, Binder, Expr (..))
 import Vehicle.Data.Builtin.Interface (Accessor (..))
 import Vehicle.Data.Code.Interface
 import Vehicle.Data.Universe (UniverseLevel)
@@ -52,10 +52,10 @@ import Vehicle.Prelude
 -- | The information stored for each variable in the environment. We choose
 -- to store the binder as it's a convenient mechanism for passing through
 -- name, relevance for pretty printing and debugging.
-type EnvEntry builtin = Thunk builtin
-
-unbound :: Lv -> EnvEntry builtin
-unbound lv = Forced $ VBoundVar lv []
+data EnvEntry builtin
+  = Bound (Thunk builtin)
+  | Unbound Lv
+  deriving (Show, Eq, Ord)
 
 newtype BoundEnv builtin = BoundEnv
   { unBoundEnv :: GenericBoundCtx (GenericBinder (), EnvEntry builtin)
@@ -65,7 +65,7 @@ newtype BoundEnv builtin = BoundEnv
 emptyBoundEnv :: BoundEnv builtin
 emptyBoundEnv = BoundEnv mempty
 
-lookupIxInEnv :: BoundEnv builtin -> Ix -> Thunk builtin
+lookupIxInEnv :: BoundEnv builtin -> Ix -> EnvEntry builtin
 lookupIxInEnv (BoundEnv env) i = snd $ lookupIxInBoundCtx i env
 
 -- | Note that the `ctxSize` must come from the current context and not a
@@ -77,7 +77,7 @@ extendEnvWithBound ::
   BoundEnv builtin ->
   BoundEnv builtin
 extendEnvWithBound ctxSize binder (BoundEnv env) =
-  BoundEnv $ (void binder, unbound ctxSize) : env
+  BoundEnv $ (void binder, Unbound ctxSize) : env
 
 extendEnvWithDefined ::
   Thunk builtin ->
@@ -85,17 +85,17 @@ extendEnvWithDefined ::
   BoundEnv builtin ->
   BoundEnv builtin
 extendEnvWithDefined value binder (BoundEnv env) =
-  BoundEnv $ (void binder, value) : env
+  BoundEnv $ (void binder, Bound value) : env
 
 boundContextToEnv :: BoundCtx expr -> BoundEnv builtin
 boundContextToEnv ctx = BoundEnv $ do
   let numberedCtx = zip ctx (reverse [0 .. Lv (length ctx - 1)])
-  fmap (bimap void unbound) numberedCtx
+  fmap (bimap void Unbound) numberedCtx
 
 namedBoundContextToEnv :: NamedBoundCtx -> BoundEnv builtin
 namedBoundContextToEnv ctx = BoundEnv $ do
   let numberedCtx = zip ctx (reverse [0 .. Lv (length ctx - 1)])
-  fmap (bimap (\n -> mkExplicitBinder () (fmap (mempty,) n)) unbound) numberedCtx
+  fmap (bimap (\n -> mkExplicitBinder () (fmap (mempty,) n)) Unbound) numberedCtx
 
 boundEnvToCtx :: BoundEnv builtin -> NamedBoundCtx
 boundEnvToCtx (BoundEnv env) = toNamedBoundCtx (fmap fst env)
@@ -132,7 +132,7 @@ thunkifyArgs env = fmap (thunkifyArg env) . NonEmpty.toList
 data Closure builtin = Closure (BoundEnv builtin) (Expr builtin)
   deriving (Show, Generic, Eq, Ord)
 
-extendClosure :: Closure builtin -> VBinder builtin -> Expr builtin -> Thunk builtin
+extendClosure :: Closure builtin -> Binder builtin -> Thunk builtin -> Thunk builtin
 extendClosure (Closure env expr) binder value =
   Thunk (extendEnvWithDefined value binder env) expr
 
@@ -142,7 +142,6 @@ extendClosure (Closure env expr) binder value =
 data Value builtin
   = Forced (ForcedValue builtin)
   | Unforced (Thunk builtin)
-  | UnforcedApp (Value builtin) (Spine builtin)
   deriving (Show, Generic, Eq, Ord)
 
 -- | A normalised expression. Internal invariant is that it should always be

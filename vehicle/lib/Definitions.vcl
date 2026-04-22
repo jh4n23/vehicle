@@ -7,6 +7,13 @@ typeAnn : forallT (t : Type) . t -> t
 typeAnn t a = a
 
 --------------------------------------------------------------------------------
+-- List
+--------------------------------------------------------------------------------
+
+appendList :: List t -> List t -> List t
+appendList xs ys = fold (\y r -> y : r) ys xs
+
+--------------------------------------------------------------------------------
 -- Bool
 --------------------------------------------------------------------------------
 
@@ -18,31 +25,6 @@ forallInList f xs = fold (\x y -> x and y) True (map f xs)
 
 existsInList : (A -> Bool) -> List A -> Bool
 existsInList f xs = fold (\x y -> x or y) False (map f xs)
-
---------------------------------------------------------------------------------
--- Tensor
---------------------------------------------------------------------------------
--- These operations have non-zero dimensions so that we have a unique
--- representation of relationships between zero-dimensional tensors
--- (i.e. pointwise comparison).
-
-eqRatTensorReduced : Tensor Real (dim :: dims) -> Tensor Real (dim :: dims) -> Bool
-eqRatTensorReduced xs ys = reduceAnd True (xs ==. ys)
-
-neRatTensorReduced : Tensor Real (dim :: dims) -> Tensor Real (dim :: dims) -> Bool
-neRatTensorReduced xs ys = not (eqRatTensorReduced xs ys)
-
-leRatTensorReduced : Tensor Real (dim :: dims) -> Tensor Real (dim :: dims) -> Bool
-leRatTensorReduced xs ys = reduceAnd True (xs <=. ys)
-
-ltRatTensorReduced : Tensor Real (dim :: dims) -> Tensor Real (dim :: dims) -> Bool
-ltRatTensorReduced xs ys = reduceAnd True (xs <. ys)
-
-geRatTensorReduced : Tensor Real (dim :: dims) -> Tensor Real (dim :: dims) -> Bool
-geRatTensorReduced xs ys = reduceAnd True (xs >=. ys)
-
-gtRatTensorReduced : Tensor Real (dim :: dims) -> Tensor Real (dim :: dims) -> Bool
-gtRatTensorReduced xs ys = reduceAnd True (xs >. ys)
 
 --------------------------------------------------------------------------------
 -- Index
@@ -156,43 +138,36 @@ record HasComparison t1 t2 where
 
 @instance
 indexHasComparison : HasComparison (Index n1) (Index n2)
-indexHasComparison =  { leTC = compareIndexLe
-                      , ltTC = compareIndexLt
-                      , geTC = compareIndexGe
-                      , gtTC = compareIndexGt
-                      , eqTC = compareIndexEq
-                      , neTC = compareIndexNe
-                      }
+indexHasComparison =
+  { leTC = compareIndexLe
+  , ltTC = compareIndexLt
+  , geTC = compareIndexGe
+  , gtTC = compareIndexGt
+  , eqTC = compareIndexEq
+  , neTC = compareIndexNe
+  }
 
 @instance
 natHasComparison : HasComparison Nat Nat
-natHasComparison =  { leTC = compareNatLe
-                    , ltTC = compareNatLt
-                    , geTC = compareNatGe
-                    , gtTC = compareNatGt
-                    , eqTC = compareNatEq
-                    , neTC = compareNatNe
-                    }
+natHasComparison =
+  { leTC = compareNatLe
+  , ltTC = compareNatLt
+  , geTC = compareNatGe
+  , gtTC = compareNatGt
+  , eqTC = compareNatEq
+  , neTC = compareNatNe
+  }
 
 @instance
-realTensorEmptyDimsHasComparison : HasComparison (Tensor Real []) (Tensor Real [])
-realTensorEmptyDimsHasComparison = { leTC = compareRatTensorPointwiseLe
-                                   , ltTC = compareRatTensorPointwiseLt
-                                   , geTC = compareRatTensorPointwiseGe
-                                   , gtTC = compareRatTensorPointwiseGt
-                                   , eqTC = compareRatTensorPointwiseEq
-                                   , neTC = compareRatTensorPointwiseNe
-                                   }
-
-@instance
-realTensorHasComparison : HasComparison (Tensor Real (dim :: dims)) (Tensor Real (dim :: dims))
-realTensorHasComparison = { leTC = compareRatTensorReducedLe
-                          , ltTC = compareRatTensorReducedLt
-                          , geTC = compareRatTensorReducedGe
-                          , gtTC = compareRatTensorReducedGt
-                          , eqTC = compareRatTensorReducedEq
-                          , neTC = compareRatTensorReducedNe
-                          }
+realTensorHasComparison : HasComparison (Tensor Real dims) (Tensor Real dims)
+realTensorHasComparison =
+  { leTC = compareRatTensorLe 0
+  , ltTC = compareRatTensorLt 0
+  , geTC = compareRatTensorGe 0
+  , gtTC = compareRatTensorGt 0
+  , eqTC = compareRatTensorEq 0
+  , neTC = compareRatTensorNe 0
+  }
 
 --------------------------------------------------------------------------------
 -- Loss logics

@@ -1,6 +1,5 @@
 module Vehicle.Compile.TypedView.Core where
 
-import GHC.Stack (HasCallStack)
 import Vehicle.Compile.Normalise.Core
 import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Prelude (Lv)
@@ -8,16 +7,58 @@ import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Data.AST.Expr.Scoped
 import Vehicle.Data.Builtin.Interface (Accessor (..))
 import Vehicle.Data.Builtin.Standard.Core
+import Vehicle.Data.Builtin.Standard.Normalise ()
 import Vehicle.Data.Code.Interface
 import Vehicle.Data.Code.Value
 import Vehicle.Data.Tensor
 import Vehicle.Prelude
 
 -------------------------------------------------------------------------------
+-- Types
+
+-- | A view on all possible expressions that can have type `Type`.
+data TypeExpr
+  = VUnitType
+  | VBoolType
+  | VIndexType (Expr Builtin)
+  | VNatType
+  | VRatType
+  | VTensorType (Expr Builtin) (Expr Builtin)
+  | VListType (Expr Builtin)
+  | VVectorType (Expr Builtin) (Expr Builtin)
+  | VPiType (Binder Builtin) (Expr Builtin)
+  | VTypeBoundVar Lv (Args Builtin)
+  | VTypeFreeVar Identifier (Args Builtin)
+
+instance TypedEvalScheme TypeExpr Builtin where
+  handleUniverse = Nothing
+  handleLam = Nothing
+  handleRecord = Nothing
+  handlePi = Just VPiType
+  handleBoundVar = VTypeBoundVar
+  handleFreeVar = VTypeFreeVar
+  handleMeta = caseTypeError "MetaVar" "BoolExpr"
+  handleRecordAcc = caseTypeError "RecordAcc" "BoolExpr"
+
+  handleBuiltin b spine = case (b, spine) of
+    (BuiltinType UnitType, []) -> VUnitType
+    (BuiltinType BoolType, []) -> VBoolType
+    (BuiltinType RatType, []) -> VRatType
+    (BuiltinType IndexType, [n]) -> VIndexType (argExpr n)
+    (BuiltinType NatType, []) -> VNatType
+    (BuiltinType ListType, [tElem]) -> VListType (argExpr tElem)
+    (BuiltinType TensorType, [tElem, ds]) -> VTensorType (argExpr tElem) (argExpr ds)
+    (BuiltinType VectorType, [tElem, dim]) -> VVectorType (argExpr tElem) (argExpr dim)
+    _ -> developerError $ "ill-typed type" <+> pretty b
+
+forceTypeExpr :: (MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m TypeExpr
+forceTypeExpr env expr = forceThunk (Thunk env expr)
+
+-------------------------------------------------------------------------------
 -- Booleans
 
--- | A view on all possible expressions that can have type `Bool` that we know how to compile
--- to constraints.
+-- | A view on all possible expressions that can have type `Tensor Bool ds`
+-- and that we know how to compile to constraints.
 data CompilableBoolTensorExpr
   = VBoolTensorLiteral (Tensor Bool)
   | VBoolStackTensor (StackTensorArgs (Expr Builtin))
@@ -28,7 +69,7 @@ data CompilableBoolTensorExpr
   | VBoolTensorQuantifyRat (Quantifier, QuantifyRatTensorArgs (Expr Builtin))
   | VBoolTensorNot (TensorOp1Args (Expr Builtin))
 
--- | A view on all possible expressions that can have type `Bool`.
+-- | A view on all possible expressions that can have type `Tensor Bool ds`.
 data BoolTensorExpr
   = VCompilableBoolTensorExpr CompilableBoolTensorExpr
   | VBoolTensorReduceAnd (TensorReductionArgs (Expr Builtin))
@@ -48,9 +89,8 @@ instance TypedEvalScheme BoolTensorExpr Builtin where
     (getExpr accessAndTensor -> Just args) -> VCompilableBoolTensorExpr $ VBoolTensorAnd args
     (getExpr accessOrTensor -> Just args) -> VCompilableBoolTensorExpr $ VBoolTensorOr args
     (getExpr accessNotTensor -> Just args) -> VCompilableBoolTensorExpr $ VBoolTensorNot args
-    (getExpr accessCompareRatTensorPointwise -> Just args) -> VBoolTensorCompareRatPointwise args
     (getExpr accessQuantifyRatTensor -> Just args) -> VCompilableBoolTensorExpr $ VBoolTensorQuantifyRat args
-    (getExpr accessCompareRatTensorReduced -> Just args) -> VCompilableBoolTensorExpr $ VBoolTensorCompareRatReduced args
+    (getExpr accessCompareRatTensor -> Just args) -> VCompilableBoolTensorExpr $ VBoolTensorCompareRatReduced _
     (getExpr accessCompareNat -> Just args) -> VBoolTensorCompareNat args
     (getExpr accessCompareIndex -> Just args) -> VBoolTensorCompareIndex args
     (getExpr accessReduceAnd -> Just args) -> VBoolTensorReduceAnd args
@@ -69,7 +109,7 @@ instance TypedEvalScheme BoolTensorExpr Builtin where
   handleMeta = caseTypeError "MetaVar" "BoolExpr"
   handleRecordAcc = caseTypeError "RecordAcc" "BoolExpr"
 
-forceBoolTensorExpr :: (HasCallStack) => BoundEnv Builtin -> Expr Builtin -> m BoolTensorExpr
+forceBoolTensorExpr :: (MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m BoolTensorExpr
 forceBoolTensorExpr env expr = forceThunk (Thunk env expr)
 
 -------------------------------------------------------------------------------
@@ -106,6 +146,9 @@ instance TypedEvalScheme NatExpr Builtin where
   handleMeta = caseTypeError "MetaVar" "NatExpr"
   handleRecordAcc = caseTypeError "RecordAcc" "NatExpr"
 
+forceNatExpr :: (MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m NatExpr
+forceNatExpr env expr = forceThunk (Thunk env expr)
+
 -------------------------------------------------------------------------------
 -- Index
 
@@ -117,6 +160,7 @@ data IndexExpr
   = VCompilableIndexValue CompilableIndexValue
   | VIndexBoundVar Lv (Args Builtin)
   | VIndexIf (IfArgs (Expr Builtin))
+  | VIndexRecordAcc (Type Builtin) (RecordExpr Builtin) FieldName (Args Builtin)
 
 instance TypedEvalScheme IndexExpr Builtin where
   handleBuiltin b spine = case normAppList (Builtin mempty b) spine of
@@ -131,7 +175,10 @@ instance TypedEvalScheme IndexExpr Builtin where
   handleBoundVar = VIndexBoundVar
   handleFreeVar = caseTypeError "FreeVar" "IndexExpr"
   handleMeta = caseTypeError "MetaVar" "IndexExpr"
-  handleRecordAcc = caseTypeError "RecordAcc" "IndexExpr"
+  handleRecordAcc = VIndexRecordAcc
+
+forceIndexExpr :: (MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m IndexExpr
+forceIndexExpr env expr = forceThunk (Thunk env expr)
 
 -------------------------------------------------------------------------------
 -- Dimensions
@@ -139,12 +186,13 @@ instance TypedEvalScheme IndexExpr Builtin where
 -- | A view on all possible expressions that can have type `List Int`.
 data CompilableDimensionsExpr
   = VDimsNil
-  | VDimsCons (Value Builtin) (Value Builtin)
+  | VDimsCons (Expr Builtin) (Expr Builtin)
 
 data DimensionsExpr
   = VCompilableDimensionsExpr CompilableDimensionsExpr
   | VDimsIf (IfArgs (Expr Builtin))
-  | VDimsBoundVar Lv (Spine Builtin)
+  | VDimsBoundVar Lv (Args Builtin)
+  | VDimsRecordAcc (Type Builtin) (RecordExpr Builtin) FieldName (Args Builtin)
 
 instance TypedEvalScheme DimensionsExpr Builtin where
   handleUniverse = Nothing
@@ -152,12 +200,9 @@ instance TypedEvalScheme DimensionsExpr Builtin where
   handleLam = Nothing
   handleRecord = Nothing
   handleBoundVar = caseTypeError "BoundVar" "RatTensorExpr"
-  handleFreeVar ident spine = case spine of
-    (getExpr accessSpine -> Just args) -> VNetworkApplication ident args
-    [] -> VParameterOrDataset ident
-    _ -> caseTypeError "FreeVar" "RatTensorExpr"
+  handleFreeVar = caseTypeError "FreeVar" "RatTensorExpr"
   handleMeta = caseTypeError "Meta" "RatTensorExpr"
-  handleRecordAcc = VRatTensorRecordAcc
+  handleRecordAcc = VDimsRecordAcc
 
   handleBuiltin b spine = case normAppList (Builtin mempty b) spine of
     (getExpr accessNil -> Just (NilArgs {})) -> VCompilableDimensionsExpr VDimsNil
@@ -165,8 +210,8 @@ instance TypedEvalScheme DimensionsExpr Builtin where
     (getExpr accessIf -> Just args) -> VDimsIf args
     _ -> developerError $ "ill-typed RatTensor builtin:" <+> pretty b
 
-toDimensionsExpr :: (HasCallStack) => BoundEnv Builtin -> Expr Builtin -> m DimensionsExpr
-toDimensionsExpr e = _
+forceDimensionsExpr :: (MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m DimensionsExpr
+forceDimensionsExpr env expr = forceThunk (Thunk env expr)
 
 -------------------------------------------------------------------------------
 -- Rational Tensors
@@ -236,8 +281,8 @@ instance TypedEvalScheme RatTensorExpr Builtin where
     (getExpr accessForeachTensor -> Just args) -> VRatForeach args
     _ -> developerError $ "ill-typed RatTensor builtin:" <+> pretty b
 
-currentPass :: Doc a
-currentPass = "typed evaluation"
+forceRatTensorExpr :: (MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m RatTensorExpr
+forceRatTensorExpr env expr = forceThunk (Thunk env expr)
 
 caseTypeError :: Doc a -> Doc a -> v
 caseTypeError op exprType = developerError $ "not expecting" <+> squotes op <+> "in expression of type" <+> exprType

@@ -10,6 +10,7 @@ import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Code.DSL
 import Vehicle.Data.DSL
 import Vehicle.Data.Variable.Free.Context (MonadFreeContext)
+import Vehicle.Libraries.StandardLibrary (appendListIdent)
 import Vehicle.Prelude (Provenance, Relevance (..))
 import Prelude hiding (iterate)
 
@@ -88,9 +89,11 @@ typeOfBuiltinFunction = \case
         tIndex n1 ~> tIndex n2 ~> tBoolTensor dimNil
   CompareNat {} ->
     tNat ~> tNat ~> tBoolTensor dimNil
-  CompareRatTensorPointwise {} ->
-    forAllDims $ \dims ->
-      tRatTensor dims ~> tRatTensor dims ~> tBoolTensor dims
+  CompareRatTensor {} ->
+    forAllDims $ \pointwiseDims ->
+      forAllDims $ \flattenedDims ->
+        let dims = freeVar appendListIdent @@ [pointwiseDims, flattenedDims]
+         in tRatTensor dims ~> tRatTensor dims ~> tBoolTensor dims
   -- Container functions
   FoldList -> typeOfFold tListRaw
   MapList -> typeOfMap tListRaw

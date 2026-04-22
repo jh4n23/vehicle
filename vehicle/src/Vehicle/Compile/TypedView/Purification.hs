@@ -4,17 +4,11 @@ module Vehicle.Compile.TypedView.Purification
   )
 where
 
-import Control.Monad (when)
 import Control.Monad.Except
-import Vehicle.Compile.LiftIf
-import Vehicle.Compile.Normalise.Core (BuiltinEvaluationResult (..))
-import Vehicle.Compile.Normalise.NBE (forceValue)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
-import Vehicle.Compile.TypedView
 import Vehicle.Compile.TypedView.Core
 import Vehicle.Compile.TypedView.Unblock
-import Vehicle.Data.Builtin.Interface (Accessor (..), BuiltinHasBoolLiterals (..), BuiltinHasForeach (..), BuiltinHasNatLiterals (..), BuiltinHasRatLiterals (..), BuiltinHasTensors (accessAtTensorBuiltin, accessConstTensorBuiltin, accessStackTensorBuiltin), applyAccessor)
 import Vehicle.Data.Builtin.Interface.Normalise
 import Vehicle.Data.Builtin.Standard
 import Vehicle.Data.Code.Interface
@@ -33,30 +27,27 @@ type MonadPurify m =
     MonadError (Expr Builtin) m
   )
 
-data RatTensorExpr
+data ConstraintExpr
   = ERatTensorLiteral RatTensor
-  | ENegRatTensor RatTensorExpr
-  | EAddRatTensor RatTensorExpr RatTensorExpr
-  | ESubRatTensor RatTensorExpr RatTensorExpr
-  | EMulRatTensor RatTensorExpr RatTensorExpr
-  | EDivRatTensor RatTensorExpr RatTensorExpr
-  | EParameterOrDataset Identifier
+  | ENegRatTensor ConstraintExpr
+  | EAddRatTensor ConstraintExpr ConstraintExpr
+  | ESubRatTensor ConstraintExpr ConstraintExpr
+  | EMulRatTensor ConstraintExpr ConstraintExpr
+  | EDivRatTensor ConstraintExpr ConstraintExpr
   | ERatTensorBoundVar Lv
 
 purifyAssertion ::
   (MonadPurify m) =>
   UnblockingActions m ->
+  BoundEnv Builtin ->
   ComparisonOp ->
-  TensorOp2Args (Value Builtin) ->
-  m (IfTree (TensorOp2Args (Value Builtin)))
-purifyAssertion actions op args = do
-  let mkCompare newArgs = return $ fromBoolValue $ VCompareRatTensor (op, newArgs)
-  unblockedExpr <- unblockTensorOp2 (purifyRatTensorExpr actions DesiredDimensions) (applyAccessor _ op) args
-
-  logDebugM MaxDetail $ do
-    ctx <- getNameContext
-    let unblockedAssertionDoc = prettyFriendly (WithContext unblockedExpr ctx)
-    return ("result:" <+> unblockedAssertionDoc)
+  TensorOp2Args (Expr Builtin) ->
+  m (IfTree (TensorOp2Args ConstraintExpr))
+purifyAssertion actions env op args@(TensorOp2Args _ e1 e2) = do
+  let purifyFn = purifyRatTensorExpr actions 0 _
+  pe1 <- purifyFn e1
+  pe2 <- purifyFn e2
+  _ <- unblockTensorOp2 (purifyRatTensorExpr actions 0) _ env args
 
   return unblockedExpr
 
@@ -109,10 +100,10 @@ purifyRatTensorExpr ::
   IncreasedDimensions ->
   BoundEnv Builtin ->
   Expr Builtin ->
-  m (IfTree RatTensorExpr)
+  m (IfTree ConstraintExpr)
 purifyRatTensorExpr actions@UnblockingActions {..} incrDims env expr = do
   showPurifyEntry expr
-  ratTensorExpr <- toRatTensorValue env expr
+  ratTensorExpr <- forceRatTensorExpr env expr
   showPurifyExit =<< case ratTensorExpr of
     -- Pure operations
     VCompilableRatTensorValue result -> case result of
@@ -139,22 +130,23 @@ purifyRatTensorExpr actions@UnblockingActions {..} incrDims env expr = do
       | otherwise -> recPurify incrDims env =<< unblockRatTensorBoundVar v
     VNetworkApplication n args -> recPurify incrDims env =<< unblockNetworkApp n args
     VParameterOrDataset _ -> _
+    VRatTensorRecordAcc {} -> _
   where
     recPurify = purifyRatTensorExpr actions
 
 purifyTensorOp1 ::
-  TypeUnblockingFunction (IfTree RatTensorExpr) m ->
-  (RatTensorExpr -> RatTensorExpr) ->
-  OperationUnblockingFunction TensorOp1Args RatTensorExpr m
+  TypeUnblockingFunction (IfTree ConstraintExpr) m ->
+  (ConstraintExpr -> ConstraintExpr) ->
+  OperationUnblockingFunction TensorOp1Args ConstraintExpr m
 purifyTensorOp1 unblock evalOp1 env (TensorOp1Args _ds xs) = do
   xs' <- unblock env xs
   forIfTreeM xs' $ \xs'' -> do
     return $ IfLeaf $ evalOp1 xs''
 
 purifyTensorOp2 ::
-  TypeUnblockingFunction (IfTree RatTensorExpr) m ->
-  (RatTensorExpr -> RatTensorExpr -> RatTensorExpr) ->
-  OperationUnblockingFunction TensorOp2Args RatTensorExpr m
+  TypeUnblockingFunction (IfTree ConstraintExpr) m ->
+  (ConstraintExpr -> ConstraintExpr -> ConstraintExpr) ->
+  OperationUnblockingFunction TensorOp2Args ConstraintExpr m
 purifyTensorOp2 unblock evalOp2 env (TensorOp2Args _ds xs ys) = do
   xs' <- unblock env xs
   ys' <- unblock env ys

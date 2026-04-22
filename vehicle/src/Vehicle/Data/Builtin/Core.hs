@@ -96,7 +96,7 @@ data BuiltinFunction
   | If
   | CompareIndex ComparisonOp
   | CompareNat ComparisonOp
-  | CompareRatTensorPointwise ComparisonOp
+  | CompareRatTensor ComparisonOp
   | ReduceAndTensor
   | ReduceOrTensor
   | -- Rat operations
@@ -159,7 +159,7 @@ instance Pretty BuiltinFunction where
     ReduceMaxRatTensor -> "reduceMaxRatTensor"
     CompareIndex op -> comparisonOpName op <> "Index"
     CompareNat op -> comparisonOpName op <> "Nat"
-    CompareRatTensorPointwise op -> comparisonOpName op <> "RatTensorPointwise"
+    CompareRatTensor op -> comparisonOpName op <> "RatTensor"
     FoldList -> "foldList"
     MapList -> "mapList"
     ForeachTensor -> "foreachTensor"

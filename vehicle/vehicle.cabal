@@ -155,6 +155,7 @@ library
     Vehicle.Compile.Normalise.Core
     Vehicle.Compile.Normalise.NBE
     Vehicle.Compile.Normalise.Quote
+    Vehicle.Compile.Normalise.Value
     Vehicle.Compile.Prelude
     Vehicle.Compile.Print
     Vehicle.Compile.Print.Error

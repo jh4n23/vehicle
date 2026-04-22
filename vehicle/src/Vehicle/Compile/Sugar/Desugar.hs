@@ -399,12 +399,12 @@ elabExpr expr = case expr of
   B.Lt e1 tk e2 -> standardLibComparison V.Lt tk e1 e2
   B.Ge e1 tk e2 -> standardLibComparison V.Ge tk e1 e2
   B.Gt e1 tk e2 -> standardLibComparison V.Gt tk e1 e2
-  B.EqPoint e1 tk e2 -> builtinFunction (V.CompareRatTensorPointwise V.Eq) tk [e1, e2]
-  B.NePoint e1 tk e2 -> builtinFunction (V.CompareRatTensorPointwise V.Ne) tk [e1, e2]
-  B.LePoint e1 tk e2 -> builtinFunction (V.CompareRatTensorPointwise V.Le) tk [e1, e2]
-  B.LtPoint e1 tk e2 -> builtinFunction (V.CompareRatTensorPointwise V.Lt) tk [e1, e2]
-  B.GePoint e1 tk e2 -> builtinFunction (V.CompareRatTensorPointwise V.Ge) tk [e1, e2]
-  B.GtPoint e1 tk e2 -> builtinFunction (V.CompareRatTensorPointwise V.Gt) tk [e1, e2]
+  B.EqPoint e1 tk e2 -> builtinFunction (V.CompareRatTensor V.Eq) tk [_, _, e1, e2]
+  B.NePoint e1 tk e2 -> builtinFunction (V.CompareRatTensor V.Ne) tk [_, _, e1, e2]
+  B.LePoint e1 tk e2 -> builtinFunction (V.CompareRatTensor V.Le) tk [_, _, e1, e2]
+  B.LtPoint e1 tk e2 -> builtinFunction (V.CompareRatTensor V.Lt) tk [_, _, e1, e2]
+  B.GePoint e1 tk e2 -> builtinFunction (V.CompareRatTensor V.Ge) tk [_, _, e1, e2]
+  B.GtPoint e1 tk e2 -> builtinFunction (V.CompareRatTensor V.Gt) tk [_, _, e1, e2]
   B.Add e1 tk e2 -> standardLibFunction "addTC" tk [e1, e2]
   B.Sub e1 tk e2 -> standardLibFunction "subTC" tk [e1, e2]
   B.Mul e1 tk e2 -> standardLibFunction "mulTC" tk [e1, e2]

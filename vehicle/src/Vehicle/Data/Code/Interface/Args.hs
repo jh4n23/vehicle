@@ -156,21 +156,21 @@ instance IsArgs IndexComparisonArgs where
         mkExpr = \(IndexCompArgs n1 n2 x y) -> [implicitIrrelevant n1, implicitIrrelevant n2, explicit x, explicit y]
       }
 
--- | Arguments for binary tensor operations (e.g. +, -)
-data TensorReduceComparisonArgs expr = TensorReduceComparisonArgs
-  { tensorReduceOp2Dim :: expr,
-    tensorReduceOp2Dims :: expr,
-    tensorReduceOp2Arg1 :: expr,
-    tensorReduceOp2Arg2 :: expr
+-- | Arguments for binary comparison operations (e.g. <=, <)
+data TensorComparisonArgs expr = TensorComparisonArgs
+  { tensorComparisonPointwiseDims :: expr,
+    tensorComparisonReducedDims :: expr,
+    tensorComparisonOpArg1 :: expr,
+    tensorComparisonOpArg2 :: expr
   }
 
-instance IsArgs TensorReduceComparisonArgs where
+instance IsArgs TensorComparisonArgs where
   accessSpine =
     Access
       { getExpr = \case
-          (fmap argExpr -> [d, ds, x, y]) -> Just $ TensorReduceComparisonArgs d ds x y
+          (fmap argExpr -> [ds, f, x, y]) -> Just $ TensorComparisonArgs ds f x y
           _ -> Nothing,
-        mkExpr = \(TensorReduceComparisonArgs d ds x y) -> [implicitIrrelevant d, implicitIrrelevant ds, explicit x, explicit y]
+        mkExpr = \(TensorComparisonArgs ds f x y) -> [implicitIrrelevant ds, explicit f, explicit x, explicit y]
       }
 
 -- | Arguments for if

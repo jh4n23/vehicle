@@ -4,8 +4,8 @@ import Control.Monad.Except
 import Vehicle.Compile.Normalise.Core (BuiltinEvaluationResult (..))
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
-import Vehicle.Compile.TypedView
 import Vehicle.Compile.TypedView.Core
+import Vehicle.Data.Builtin.Interface
 import Vehicle.Data.Builtin.Interface.Normalise
 import Vehicle.Data.Builtin.Standard
 import Vehicle.Data.Code.Interface
@@ -44,13 +44,13 @@ forIfTreeM tree f = case tree of
 -- | Lifts all `if`s in the provided expression `e` to the top-level, while
 -- preserving the guarantee that the expression is normalised as much as
 -- possible.
-unblockBoolExpr ::
+forceCompilableBoolExpr ::
   (MonadUnblock m) =>
   UnblockingActions (ExceptT (Expr Builtin) m) ->
   BoundEnv Builtin ->
   Expr Builtin ->
-  m (Value Builtin)
-unblockBoolExpr actions env expr = do
+  m CompilableBoolTensorExpr
+forceCompilableBoolExpr actions env expr = do
   -- logDebug MaxDetail $ line <> "unblocking" <+> exprDoc
   -- incrCallDepth
 
@@ -59,7 +59,7 @@ unblockBoolExpr actions env expr = do
     Left unblockableExpr -> do
       exprDoc <- prettyFriendlyInCtx unblockableExpr
       developerError $ "Failed to unblock expression:" <+> exprDoc
-    Right value -> _
+    Right value -> return value
 
   decrCallDepth
   return unblockedExpr
@@ -70,13 +70,13 @@ unblockBoolExpr actions env expr = do
 type TypeUnblockingFunction compilableExpr m =
   (MonadUnblock m) => BoundEnv Builtin -> Expr Builtin -> m compilableExpr
 
-unblockBoolTensorValue :: UnblockingActions m -> TypeUnblockingFunction CompilableBoolTensorValue m
+unblockBoolTensorValue :: UnblockingActions m -> TypeUnblockingFunction CompilableBoolTensorExpr m
 unblockBoolTensorValue actions env expr = do
   showEntry expr
-  boolValue <- toBoolTensorExpr env expr
+  boolValue <- forceBoolTensorExpr env expr
   showExit =<< case boolValue of
     -- Already unblocked
-    VCompilableBoolTensorValue result -> return result
+    VCompilableBoolTensorExpr result -> return result
     -- Recursively unblock
     VBoolTensorIf args -> elimIfTree <$> unblockIf unblock env args
     VBoolTensorReduceAnd args -> elimIfTree <$> unblockReduceTensor unblock evalReduceAndTensor env args
@@ -92,14 +92,14 @@ unblockBoolTensorValue actions env expr = do
 unblockRatTensorValue :: (MonadUnblock m) => UnblockingActions m -> TypeUnblockingFunction (IfTree CompilableRatTensorValue) m
 unblockRatTensorValue actions@UnblockingActions {..} env expr = do
   showEntry expr
-  ratTensorExpr <- toRatTensorValue env expr
+  ratTensorExpr <- forceRatTensorExpr env expr
   showExit =<< case ratTensorExpr of
     -- Rational operators
     VCompilableRatTensorValue result -> return $ IfLeaf result
     -- Recursively purify
     VIfRatTensor args -> unblockIf unblock env args
-    VMinRatTensor args -> unblockMinRatTensor env args
-    VMaxRatTensor args -> unblockMaxRatTensor env args
+    VMinRatTensor args -> unblockMinRatTensor unblock env args
+    VMaxRatTensor args -> unblockMaxRatTensor unblock env args
     VNegRatTensor args -> unblockTensorOp1 unblock evalNegRatTensor env args
     VAddRatTensor args -> unblockTensorOp2 unblock evalAddRatTensor env args
     VSubRatTensor args -> unblockTensorOp2 unblock evalSubRatTensor env args
@@ -113,23 +113,25 @@ unblockRatTensorValue actions@UnblockingActions {..} env expr = do
     VNetworkApplication n args -> unblock env =<< unblockNetworkApp n args
     VRatAt args -> unblockAtTensor unblock env args
     VRatForeach args -> unblockForeachTensor unblock env args
+    VRatTensorRecordAcc _ _ _ _ -> _
     VParameterOrDataset _ -> _
   where
     unblock = unblockRatTensorValue actions
 
 unblockIndexValue :: TypeUnblockingFunction (IfTree CompilableIndexValue) m
 unblockIndexValue env expr = do
-  indexExpr <- toIndexValue env expr
+  indexExpr <- forceIndexExpr env expr
   case indexExpr of
     VCompilableIndexValue result -> return $ IfLeaf result
     VIndexIf args -> unblockIf unblock env args
+    VIndexRecordAcc typ _ _ _ -> _
     VIndexBoundVar {} -> unexpectedExprError currentPass (prettyVerbose expr)
   where
     unblock = unblockIndexValue
 
 unblockNatValue :: TypeUnblockingFunction (IfTree CompilableNatExpr) m
 unblockNatValue env expr = do
-  natExpr <- toNatValue env expr
+  natExpr <- forceNatExpr env expr
   case natExpr of
     VCompilableNat result -> return $ IfLeaf result
     VNatIf args -> unblockIf unblock env args
@@ -152,13 +154,26 @@ unblockIf ::
 unblockIf unblock env (IfArgs _ c x y) =
   IfTree c <$> unblock env x <*> unblock env y
 
+unblockRatTensorExtrema ::
+  ComparisonOp ->
+  TypeUnblockingFunction (IfTree inputCompilableExpr) m ->
+  OperationUnblockingFunction TensorOp2Args inputCompilableExpr m
+unblockRatTensorExtrema op unblock env (TensorOp2Args ds x y) = do
+  x' <- unblock env x
+  y' <- unblock env y
+  let comparisonArgs = TensorReduceComparisonArgs _ ds _ _
+  let comparison = mkExpr accessCompareRatTensorReduced (op, comparisonArgs)
+  return $ IfTree comparison x' y'
+
 unblockMinRatTensor ::
-  OperationUnblockingFunction TensorOp2Args CompilableRatTensorValue m
-unblockMinRatTensor = _
+  TypeUnblockingFunction (IfTree inputCompilableExpr) m ->
+  OperationUnblockingFunction TensorOp2Args inputCompilableExpr m
+unblockMinRatTensor = unblockRatTensorExtrema Le
 
 unblockMaxRatTensor ::
-  OperationUnblockingFunction TensorOp2Args CompilableRatTensorValue m
-unblockMaxRatTensor = _
+  TypeUnblockingFunction (IfTree inputCompilableExpr) m ->
+  OperationUnblockingFunction TensorOp2Args inputCompilableExpr m
+unblockMaxRatTensor = unblockRatTensorExtrema Ge
 
 unblockOp2 ::
   TypeUnblockingFunction (IfTree inputCompilableExpr) m ->
@@ -175,9 +190,9 @@ unblockOp2 unblockArg unblockResult evalOp env (Op2Args x y) = do
           Op2Args (_ x'') (_ y'')
 
 unblockIndexOp2 ::
-  TypeUnblockingFunction (IfTree CompilableBoolTensorValue) m ->
+  TypeUnblockingFunction (IfTree CompilableBoolTensorExpr) m ->
   ComparisonOp ->
-  OperationUnblockingFunction IndexComparisonArgs CompilableBoolTensorValue m
+  OperationUnblockingFunction IndexComparisonArgs CompilableBoolTensorExpr m
 unblockIndexOp2 unblock op env (IndexCompArgs n1 n2 x y) = do
   x' <- unblockIndexValue env x
   y' <- unblockIndexValue env y
@@ -185,7 +200,7 @@ unblockIndexOp2 unblock op env (IndexCompArgs n1 n2 x y) = do
     forIfTreeM y' $ \y'' ->
       unblock env =<< do
         forceEvaluation (evalCompareIndex op) $
-          IndexCompArgs n1 n2 (_ x'') (_ y'')
+          IndexCompArgs n1 n2 x'' y''
 
 unblockTensorOp1 ::
   TypeUnblockingFunction (IfTree compilableExpr) m ->
@@ -245,7 +260,7 @@ unblockForeachTensor unblock env (ForeachTensorArgs tElem d ds fn) = do
 forceEvaluation ::
   (MonadUnblock m) =>
   BuiltinEvaluation args Builtin m ->
-  args (Expr Builtin) ->
+  args (expr Builtin) ->
   m (Expr Builtin)
 forceEvaluation evalFn args = do
   evalResult <- evalFn args
@@ -253,7 +268,7 @@ forceEvaluation evalFn args = do
     Evaluated result -> result
     Unevaluated {} -> _
 
-elimIfTree :: IfTree CompilableBoolTensorValue -> CompilableBoolTensorValue
+elimIfTree :: IfTree CompilableBoolTensorExpr -> CompilableBoolTensorExpr
 elimIfTree = _
 
 --------------------------------------------------------------------------------

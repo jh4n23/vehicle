@@ -54,7 +54,7 @@ getUserVariableDims ::
   VBinder Builtin ->
   m (Value Builtin)
 getUserVariableDims binder = do
-  forcedType <- forceThunk (typeOf binder)
-  case toTypeValue forcedType of
+  forcedType <- forceTypeExpr (typeOf binder)
+  case forcedType of
     VTensorType _tElem dims -> return dims
     _ -> developerError $ "Unexpected quantifier type:" <+> prettyVerbose (Unforced $ typeOf binder)
