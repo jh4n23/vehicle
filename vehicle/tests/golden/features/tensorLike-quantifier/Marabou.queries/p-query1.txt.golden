@@ -4,7 +4,9 @@
 //  - Vehicle version: 0.24.1+dev
 //
 // Assertions
-y0 <= 0.0
+-x0 +y0 <= 0.0
 // Input bounds
 x0 >= 0.0
-x0 <= 1.0
+x0 <= 10.0
+x1 >= 0.0
+x1 <= 10.0

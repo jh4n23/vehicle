@@ -369,10 +369,12 @@ andPartitions p1 p2 = do
   return $ Partitions $ Map.fromList $ disjunctsToList disjuncts
 
 unblockingActions :: (MonadDomain m) => UnblockingActions m
+-- TODO: define proprtly for record unblock
 unblockingActions =
   UnblockingActions
     { unblockRatTensorBoundVar = purifyBoundVar,
-      unblockNetworkApp = \_unblockFn ident args -> return $ VFreeVar ident (mkExpr accessSpine args)
+      unblockRecordBoundVar = undefined,
+      unblockNetworkApp = \_unblockTensorFn _unblockRecordFn ident args -> return $ VFreeVar ident (mkExpr accessSpine args)
     }
 
 --------------------------------------------------------------------------------
@@ -398,6 +400,7 @@ compileBool value = logEntryAndExit value $ case toBoolValue value of
   VBoolIf args -> compileBool =<< unfoldIf args
   VNot args -> compileBool =<< lowerNot args
   VQuantifyRatTensor args -> compileQuantifierInternal args
+  VQuantifyRecord _args -> compilerDeveloperError "LAUREN TODO: unsupported record quantifier"
   -------------------
   -- Blocked cases --
   -------------------
@@ -541,19 +544,22 @@ purifyAssertion op args = do
       Right value -> return value
 
 purifyUnblockingActions :: (MonadPurifyAssertion m) => UnblockingActions m
+-- TODO: define properly for records
 purifyUnblockingActions =
   UnblockingActions
     { unblockRatTensorBoundVar = purifyBoundVar,
+      unblockRecordBoundVar = undefined,
       unblockNetworkApp = purifyNetworkApp
     }
 
 purifyNetworkApp ::
   (MonadPurifyAssertion m) =>
   (Value Builtin -> m (Value Builtin)) ->
+  (Value Builtin -> m (Value Builtin)) ->
   Identifier ->
   NetworkAppArgs (Value Builtin) ->
   m (Value Builtin)
-purifyNetworkApp _unblockFn ident _spine = throwError $ ContainsNetwork ident
+purifyNetworkApp _unblockTensorFn _unblockRecordFn ident _spine = throwError $ ContainsNetwork ident
 
 purifyBoundVar :: (MonadLogger m, MonadReadableTensorBoundContext m) => Lv -> m (Value Builtin)
 purifyBoundVar lv = do
@@ -602,6 +608,7 @@ compileLinearExpr dims expr = case toRatTensorValue expr of
   VRatConstTensor {} -> unlinearisable
   VRatStackTensor {} -> unlinearisable
   VRatAt {} -> unlinearisable
+  VRatRecordAcc {} -> unlinearisable
   VRatTensorFreeVar ident [] ->
     return $ constantExpr $ TensorValue dims (VFreeVar ident [])
   VRatTensorFreeVar {} -> unlinearisable

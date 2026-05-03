@@ -7,6 +7,7 @@ module Vehicle.Compile.Normalise.NBE
     normaliseInFreeCtx,
     normaliseApp,
     evalBuiltin,
+    evalRecordAcc,
     normaliseClosure,
     normaliseClosureInCtx,
     evalDecl,
@@ -14,6 +15,7 @@ module Vehicle.Compile.Normalise.NBE
     evalInEmptyEnv,
     evalApp,
     findInstanceArg,
+    lookupIdentValue
   )
 where
 
@@ -161,6 +163,18 @@ evalRecordDef = go mempty emptyBoundEnv
       [] -> do
         fields' <- traverseRecordFields (eval ctx boundEnv) fields
         return ([], fields')
+
+evalRecordAcc ::
+  (MonadNorm builtin m, MonadFreeContext builtin m) =>
+  Value builtin ->
+  FieldName ->
+  m (Value builtin)
+evalRecordAcc value fieldName = do
+  fields <- case value of
+    VRecord _typ fields -> return fields
+    _ -> developerError "record not of expected type"
+  return $ lookupRecordFieldS fields fieldName
+
 
 eval ::
   (MonadNorm builtin m, MonadFreeContext builtin m) =>

@@ -4,7 +4,7 @@ import Control.DeepSeq (NFData)
 import Data.Aeson (ToJSON)
 import Data.Aeson.Types (FromJSON)
 import GHC.Generics
-import Vehicle.Data.Builtin.Core (BuiltinType (..))
+import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Tensor (TensorShape)
 import Vehicle.Prelude
 
@@ -14,8 +14,8 @@ import Vehicle.Prelude
 type NetworkName = Name
 
 data NetworkType = NetworkType
-  { inputTensor :: NetworkTensorType,
-    outputTensor :: NetworkTensorType
+  { inputTensor :: NetworkIOType,
+    outputTensor :: NetworkIOType
   }
   deriving (Eq, Ord, Show, Generic)
 
@@ -32,26 +32,37 @@ instance Pretty NetworkType where
 networkSize :: NetworkType -> Int
 networkSize network = tensorSize (inputTensor network) + tensorSize (outputTensor network)
 
-data NetworkTensorType = NetworkTensorType
-  { baseType :: NetworkBaseType,
-    dimensions :: TensorShape
-  }
+data NetworkIOType
+  = NetworkTensorType { 
+    baseType :: NetworkBaseType, 
+    dimensions :: TensorShape 
+    }
+  | NetworkRecordType { 
+      baseRecordType :: NetworkBaseType,
+      recordTypeIdent :: Identifier,
+      recordDimensions :: TensorShape,
+      recordFields :: GenericRecordFieldNames
+    }
   deriving (Eq, Ord, Show, Generic)
 
-instance NFData NetworkTensorType
+instance NFData NetworkIOType
 
-instance ToJSON NetworkTensorType
+instance ToJSON NetworkIOType
 
-instance FromJSON NetworkTensorType
+instance FromJSON NetworkIOType
 
-tensorSize :: NetworkTensorType -> Int
-tensorSize tensor = product (dimensions tensor)
 
-instance Pretty NetworkTensorType where
-  pretty tensor =
-    "Tensor"
-      <+> pretty (baseType tensor)
-      <+> pretty (dimensions tensor)
+type GenericRecordFieldNames = [FieldName]
+
+tensorSize :: NetworkIOType -> Int
+tensorSize typ = case typ of
+  NetworkTensorType _ dims -> product dims
+  NetworkRecordType _ _ dims _ -> product dims
+
+instance Pretty NetworkIOType where
+  pretty = \case
+    NetworkTensorType t dims -> "Tensor" <+> pretty t <+> pretty dims
+    NetworkRecordType t _ident dims _fields -> "Record" <+> pretty t <+> pretty dims
 
 data NetworkBaseType
   = NetworkRatType

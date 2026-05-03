@@ -17,6 +17,8 @@ import Vehicle.Data.Code.DSL
 import Vehicle.Data.DSL
 import Vehicle.Data.Tensor (pattern ZeroDimTensor)
 import Vehicle.Libraries.StandardLibrary
+import Vehicle.Compile.ExpandResources.Core (MonadExpandResources)
+import Vehicle.Compile.Resource (GenericRecordFieldNames)
 
 instance ScopableBuiltin Builtin where
   generateAuxiliaryRecordDefinitions p ident sort telescope fields
@@ -169,8 +171,8 @@ createTensorLikeHasQuantifierInstance p recordIdent = do
         Record
           p
           recordType
-          [ (forAllTCFieldName, fromDSL mempty (builtinFunction (QuantifyTensorLike Forall))),
-            (existsTCFieldName, fromDSL mempty (builtinFunction (QuantifyTensorLike Exists)))
+          [ (forAllTCFieldName, fromDSL mempty (builtinFunction (QuantifyRecord Forall))),
+            (existsTCFieldName, fromDSL mempty (builtinFunction (QuantifyRecord Exists)))
           ]
 
   DefFunction p functionIdent (FunctionDecl 1 (Just (AnnInstance Nothing))) recordType functionBody
@@ -235,3 +237,53 @@ createComparisonField ::
 createComparisonField recordType toTensor fieldIdent = do
   fromDSL mempty $ explLam "r1" recordType $ \r1 ->
     explLam "r2" recordType $ \r2 -> fieldIdent @@ [toTensor @@ [r1], toTensor @@ [r2]]
+
+-- -----------------------------------------------------------------------------------------------
+-- TensorLike util functions
+
+getRecordDims ::
+  (MonadError CompileError m) =>
+  FreeCtxEntry Builtin ->
+  m Int
+getRecordDims (DefRecord _ _ _ _ fields) = return $ length fields
+getRecordDims _ = compilerDeveloperError "Record declaration is not of expected format."
+
+getRecordDimsExpr ::
+  (MonadError CompileError m) =>
+  FreeCtxEntry Builtin ->
+  m (Expr Builtin)
+getRecordDimsExpr r = do
+  singleDim <- getRecordDims r
+  return $ fromDSL mempty $ dimCons (dim singleDim) dimNil
+
+getRecordProvenance ::
+  (MonadError CompileError m) =>
+  FreeCtxEntry Builtin ->
+  m Provenance
+getRecordProvenance (DefRecord p _ _ _ _) = return p
+getRecordProvenance _ = compilerDeveloperError "Record declaration is not of expected format."
+
+getRecordFieldNames ::
+  forall m.
+  (MonadExpandResources m) =>
+  FreeCtxEntry Builtin ->
+  m GenericRecordFieldNames
+getRecordFieldNames r = case r of
+  DefRecord _p _ident _sort _telescope fields -> return $ map fst fields
+  _ -> compilerDeveloperError "Record declaration is not of expected format."
+
+constructFromTensorFreeVar ::
+  Identifier ->
+  Provenance ->
+  Expr Builtin
+constructFromTensorFreeVar ident p =
+  let name = Text.pack "_" <> identifierName ident <> "FromTensor"
+  in FreeVar p (Identifier (modulePath ident) name)
+
+constructToTensorFreeVar ::
+  Identifier ->
+  Provenance ->
+  Expr Builtin
+constructToTensorFreeVar ident p =
+  let name = Text.pack "_" <> identifierName ident <> "ToTensor"
+  in FreeVar p (Identifier (modulePath ident) name)

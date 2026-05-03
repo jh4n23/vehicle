@@ -34,9 +34,11 @@ import Vehicle.Data.MaybeTrivial
 import Vehicle.Data.Variable.Bound.Context.Name (getNameContext, prettyFriendlyInCtx)
 import Vehicle.Data.Variable.Bound.Context.Tensor (replaceTensorVariableWithStackedChildren)
 import Vehicle.Data.Variable.Bound.Level
-import Vehicle.Verify.Core (inputShape)
 import Vehicle.Verify.QueryFormat (QueryFormat (..), supportsStrictInequalities)
 import Prelude hiding (Applicative (..))
+import Vehicle.Verify.Core 
+import Vehicle.Compile.Resource
+import Vehicle.Data.Builtin.Standard.Scoping (constructFromTensorFreeVar, constructToTensorFreeVar)
 
 eliminateExists ::
   (MonadQueryStructure m) =>
@@ -102,6 +104,7 @@ compileBoolExpr expr = do
     VBoolLiteral b -> return $ Trivial b
     VCompareRatTensor (op, args) -> purifyAndCompileAssertion op args
     VQuantifyRatTensor (Forall, _) -> throwError catchableUnsupportedAlternatingQuantifiersError
+    VQuantifyRecord (Forall, _) -> throwError catchableUnsupportedAlternatingQuantifiersError
     ---------------------
     -- Recursive cases --
     ---------------------
@@ -110,6 +113,7 @@ compileBoolExpr expr = do
     VAnd (TensorOp2Args _dims x y) -> andTrivial andPartitions <$> compileBoolExpr x <*> compileBoolExpr y
     VOr (TensorOp2Args _dims x y) -> orTrivial orPartitions <$> compileBoolExpr x <*> compileBoolExpr y
     VQuantifyRatTensor (Exists, args) -> eliminateExists args
+    VQuantifyRecord (Exists, _args) -> compilerDeveloperError "LAUREN TODO: quantifyRecord case in compileBoolExpr"
     VCompareNat {} -> unblockAndRec expr
     VCompareIndex {} -> unblockAndRec expr
     VReduceAndTensor {} -> unblockAndRec expr
@@ -180,8 +184,8 @@ type MonadQuantifierBody m =
     MonadWriter [Value Builtin] m
   )
 
-unblockingActions :: (MonadQuantifierBody m) => UnblockingActions m
-unblockingActions = UnblockingActions unblockQuantifiedBoundVar unblockNetworkApplication
+unblockingActions :: (MonadQuantifierBody m, MonadPropertyStructure m) => UnblockingActions m
+unblockingActions = UnblockingActions unblockQuantifiedBoundVar undefined unblockNetworkApplication
 
 unblockQuantifiedBoundVar ::
   (MonadQuantifierBody m) =>
@@ -193,35 +197,63 @@ unblockQuantifiedBoundVar lv =
 unblockNetworkApplication ::
   (MonadQuantifierBody m) =>
   (Value Builtin -> m (Value Builtin)) ->
+  (Value Builtin -> m (Value Builtin)) ->
   Identifier ->
   NetworkAppArgs (Value Builtin) ->
   m (Value Builtin)
-unblockNetworkApplication unblockFn ident (NetworkAppArgs arg) = do
+unblockNetworkApplication unblockFnTensor unblockFnRecord ident (NetworkAppArgs arg) = do
   let name = nameOf ident
   networkInfo <- asks (lookupNetworkInfo name . networkCtx)
 
+  let typ = networkType networkInfo
   (inputVarExpr, outputVarExpr) <- addNetworkApplicationToGlobalCtx name networkInfo arg
-  let inputEquality =
-        fromBoolValue $
-          VCompareRatTensor
-            ( Eq,
-              TensorOp2Args
-                { tensorOp2Dims = mkDims (inputShape networkInfo),
-                  tensorOp2Arg1 = inputVarExpr,
-                  tensorOp2Arg2 = arg
-                }
-            )
+  ctx <- getNameContext
+
+  transformedInput <- case inputTensor typ of 
+    NetworkRecordType  _ recordTyp _ _ -> do 
+      fromTensorFn <- eval ctx emptyBoundEnv (constructFromTensorFreeVar recordTyp mempty)
+      evalApp ctx fromTensorFn [Arg Explicit Relevant inputVarExpr]
+    _ -> return inputVarExpr
+
+  transformedOutput <- case outputTensor typ of 
+    NetworkRecordType _ recordTyp _ _ -> do 
+      fromTensorValue <- eval ctx emptyBoundEnv (constructFromTensorFreeVar recordTyp mempty)
+      evalApp ctx fromTensorValue [Arg Explicit Relevant outputVarExpr]
+    _ -> return outputVarExpr
+
+  inputEquality <- case inputTensor typ of 
+    NetworkRecordType _ recordTyp _ _ -> do
+      toTensorFn <- eval ctx emptyBoundEnv (constructToTensorFreeVar recordTyp mempty)
+      argAsTensor <- evalApp ctx toTensorFn [Arg Explicit Relevant arg]
+      inputAsTensor <- evalApp ctx toTensorFn [Arg Explicit Relevant transformedInput]
+      return $ fromBoolValue $ VCompareRatTensor ( Eq, TensorOp2Args
+                  { tensorOp2Dims = mkDims (inputShape networkInfo),
+                    tensorOp2Arg1 = inputAsTensor,
+                    tensorOp2Arg2 = argAsTensor
+                  }
+              )
+
+    _ -> return $ fromBoolValue $ VCompareRatTensor ( Eq,TensorOp2Args
+                  { tensorOp2Dims = mkDims (inputShape networkInfo),
+                    tensorOp2Arg1 = transformedInput,
+                    tensorOp2Arg2 = arg
+                  }
+              )
+
   tell [inputEquality]
 
   logDebugM MaxDetail $ do
     inputEqualityDoc <- prettyFriendlyInCtx inputEquality
-    replacementExprDoc <- prettyFriendlyInCtx outputVarExpr
+    replacementExprDoc <- prettyFriendlyInCtx transformedOutput
     return $
       "note-input-equality" <+> inputEqualityDoc
         <> line
         <> "replace-expr" <+> replacementExprDoc
 
-  unblockFn outputVarExpr
+  case outputTensor typ of 
+    NetworkRecordType {} -> unblockFnRecord transformedOutput
+    _ -> unblockFnTensor transformedOutput
+
 
 --------------------------------------------------------------------------------
 -- Elimination operations
@@ -245,7 +277,8 @@ eliminateTensorAssertion ::
   ComparisonOp ->
   TensorOp2Args (Value Builtin) ->
   m (Value Builtin)
-eliminateTensorAssertion op (TensorOp2Args dims xs ys) =
+eliminateTensorAssertion op (TensorOp2Args dims xs ys) = do
+  _ <- logDebug MidDetail $ "dims are" <+> pretty (show dims) <+> "xs are" <+> pretty (show xs) <+> "ys are" <+> pretty (show ys)
   case dims of
     IDimNil -> do
       -- For scalar comparisons, directly apply the comparison

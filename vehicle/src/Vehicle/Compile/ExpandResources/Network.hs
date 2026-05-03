@@ -4,6 +4,7 @@ module Vehicle.Compile.ExpandResources.Network
 where
 
 import Control.Monad.Except (MonadError (..))
+import Data.Data (Proxy (..))
 import Data.Map qualified as Map
 import Vehicle.Compile.Error
 import Vehicle.Compile.ExpandResources.Core
@@ -13,11 +14,14 @@ import Vehicle.Compile.Print
 import Vehicle.Compile.Resource
 import Vehicle.Data.Builtin.Standard
 import Vehicle.Data.Code.Interface
-import Vehicle.Data.Code.TypedView (DimensionsValue (..), TypeValue (..), toDimensionsValue, toTypeValue)
+import Vehicle.Data.Code.TypedView (DimensionsValue (..), TensorLikeValue (..), TypeValue (..), toDimensionsValue, toTypeValue)
 import Vehicle.Data.Code.Value
 import Vehicle.Data.Tensor (TensorShape)
+import Vehicle.Data.Variable.Free.Context.Class
 import Vehicle.Verify.Core (NetworkContextInfo (..))
+import Vehicle.Data.Builtin.Standard.Scoping (getRecordDims, getRecordFieldNames)
 
+-- import Vehicle.Data.AST.Decl (GenericDecl (..))
 --------------------------------------------------------------------------------
 -- Network typing
 
@@ -51,11 +55,16 @@ getNetworkType decl networkType = case normalised networkType of
         return networkDetails
   _ -> compilerDeveloperError "Should have caught the fact that the network type is not a function during type-checking"
   where
-    tensorType :: InputOrOutput -> VType Builtin -> m NetworkTensorType
+    tensorType :: InputOrOutput -> VType Builtin -> m NetworkIOType
     tensorType io t = case toTypeValue t of
-      VRatTensorType dims -> do
+      VTensorLike (VRatTensorType dims) -> do
         shape <- tensorDimensions io dims
-        return $ NetworkTensorType NetworkRatType shape
+        return $ NetworkTensorType  NetworkRatType shape
+      VFreeTypeVar v _spine -> do
+        entry <- getDeclEntry (Proxy @Builtin) v
+        shape <- getRecordDims entry
+        fields <- getRecordFieldNames entry
+        return $ NetworkRecordType NetworkRatType v [shape] fields
       _ -> typingError
 
     tensorDimensions :: InputOrOutput -> VType Builtin -> m TensorShape
