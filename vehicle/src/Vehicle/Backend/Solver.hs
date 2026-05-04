@@ -44,8 +44,9 @@ import Vehicle.Compile.Normalise.Quote
 import Vehicle.Data.Code.DSL
 import Vehicle.Data.DSL
 import Vehicle.Compile.Normalise.NBE
-import Vehicle.Data.Builtin.Standard.Scoping (getRecordDimsExpr, getRecordProvenance, constructFromTensorFreeVar)
+import Vehicle.Data.Builtin.Standard.Scoping (getRecordDimsExpr, getRecordProvenance, constructFromTensorFreeVar, getRecordFieldNames)
 import qualified Data.Text as Text
+import System.Directory.Internal.Prelude (fromMaybe)
 
 
 --------------------------------------------------------------------------------
@@ -207,14 +208,24 @@ compileQueries expr = do
     -- Base cases --
     ----------------
     VBoolLiteral b -> return $ Trivial b
-    VQuantifyRatTensor (Exists, args) -> compileQuantifiedQuerySet False args
+    VQuantifyRatTensor (Exists, args) -> compileQuantifiedQuerySet False args []
     VQuantifyRatTensor (Forall, args) -> do
       logDebug MaxDetail $ "negate" <+> pretty Forall
       negatedArgs <- negateQuantifierBody args
-      compileQuantifiedQuerySet True negatedArgs
-    VQuantifyRecord (q, args) -> do
-      wrappedBinderArgs <- wrapQuantifyRecord args
-      compileQueries (fromBoolValue $ VQuantifyRatTensor (q, wrappedBinderArgs))
+      compileQuantifiedQuerySet True negatedArgs []
+    VQuantifyRecord (Exists, args) -> do
+      (wrappedBinderArgs, step) <- wrapQuantifyRecord args
+      compileQuantifiedQuerySet False wrappedBinderArgs [step]
+    VQuantifyRecord (Forall, args) -> do
+      logDebug MaxDetail $ "negate" <+> pretty Forall
+      (wrappedBinderArgs, step) <- wrapQuantifyRecord args
+      negatedArgs <- negateQuantifierBody wrappedBinderArgs
+      compileQuantifiedQuerySet True negatedArgs [step]
+
+      -- make compilationTrace
+      -- | ConvertQuantifiedTensorLike Name [FieldName]
+
+      --compileQueries (fromBoolValue $ VQuantifyRatTensor (q, wrappedBinderArgs))
     ---------------------
     -- Recursive cases --
     ---------------------
@@ -248,11 +259,17 @@ compileQuantifiedQuerySet ::
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m) =>
   Bool ->
   QuantifyRatTensorArgs (Value Builtin) (Closure Builtin) ->
+  [CompilationStep] ->
   m (Property QueryMetaData)
-compileQuantifiedQuerySet isPropertyNegated args =
+compileQuantifiedQuerySet isPropertyNegated args prevSteps =
   logCompilerSection2 MaxDetail "compilation of query set" $ do
-    (maybePartitions, globalCtx) <- runStateT (eliminateExists args) emptyGlobalCtx
+    (maybePartitions, globalCtx) <- runStateT (eliminateExists args prevSteps) emptyGlobalCtx
     compileQuerySetPartitions globalCtx isPropertyNegated maybePartitions
+
+  -- let step = SolveInequalities (toSliceVar var) bounds
+  -- let newCompilationTrace = step : steps
+  -- logInequalitiesSolved var step remainingTree
+  -- return $ fmap (newCompilationTrace,) updatedTree
 
 getFreshTensorBinderName ::
   NamedBoundCtx ->
@@ -272,7 +289,7 @@ wrapQuantifyRecord ::
   MonadStdIO m,
   MonadFreeContext Builtin m) =>
   QuantifyRecordArgs (Value Builtin) (Closure Builtin) ->
-  m (QuantifyRatTensorArgs (Value Builtin) (Closure Builtin))
+  m (QuantifyRatTensorArgs (Value Builtin) (Closure Builtin), CompilationStep)
 wrapQuantifyRecord QuantifyRecordArgs{..} = do
 
   recordTypeIdent <- case toTypeValue quantifyRecordType of
@@ -308,7 +325,12 @@ wrapQuantifyRecord QuantifyRecordArgs{..} = do
   let nestedRecordQuantifierClosure = Closure boundEnv nestedRecordQuantifier
 
   let ratTensorArgs = QuantifyRatTensorArgs normalisedDims tensorBinder nestedRecordQuantifierClosure
-  return ratTensorArgs
+
+  -- make compilationStep
+  let name = fromMaybe (developerError "Quantified variable binder should have name") (nameOf quantifyRecordBinder)
+  fields <- getRecordFieldNames recordTypeDecl
+
+  return (ratTensorArgs, ConvertQuantifiedTensorLike name fields)
 
 compileUnquantifiedQuerySet ::
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m) =>

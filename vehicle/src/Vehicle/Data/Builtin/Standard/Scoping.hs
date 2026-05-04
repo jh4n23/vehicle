@@ -17,7 +17,6 @@ import Vehicle.Data.Code.DSL
 import Vehicle.Data.DSL
 import Vehicle.Data.Tensor (pattern ZeroDimTensor)
 import Vehicle.Libraries.StandardLibrary
-import Vehicle.Compile.ExpandResources.Core (MonadExpandResources)
 import Vehicle.Compile.Resource (GenericRecordFieldNames)
 
 instance ScopableBuiltin Builtin where
@@ -265,7 +264,7 @@ getRecordProvenance _ = compilerDeveloperError "Record declaration is not of exp
 
 getRecordFieldNames ::
   forall m.
-  (MonadExpandResources m) =>
+  (MonadError CompileError m) =>
   FreeCtxEntry Builtin ->
   m GenericRecordFieldNames
 getRecordFieldNames r = case r of

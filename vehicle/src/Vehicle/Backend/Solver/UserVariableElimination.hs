@@ -39,12 +39,15 @@ import Prelude hiding (Applicative (..))
 import Vehicle.Verify.Core 
 import Vehicle.Compile.Resource
 import Vehicle.Data.Builtin.Standard.Scoping (constructFromTensorFreeVar, constructToTensorFreeVar)
+import Vehicle.Verify.Specification (CompilationStep)
+import Data.Map qualified as Map
 
 eliminateExists ::
   (MonadQueryStructure m) =>
   QuantifyRatTensorArgs (Value Builtin) (Closure Builtin) ->
+  [CompilationStep] ->
   m (MaybeTrivial Partitions)
-eliminateExists (QuantifyRatTensorArgs _ binder (Closure env body)) = do
+eliminateExists (QuantifyRatTensorArgs _ binder (Closure env body)) prevSteps = do
   let varName = getBinderName binder
   let subpassDoc = "elimination of existential quantifier over" <+> quotePretty varName
   logCompilerSection2 MidDetail subpassDoc $ do
@@ -68,13 +71,22 @@ eliminateExists (QuantifyRatTensorArgs _ binder (Closure env body)) = do
     -- Recursively compile the expression.
     (partitions, networkInputEqualities) <-
       logCompilerSection2 MidDetail "reduction of body to assertion tree" $ runWriterT (compileBoolExpr normExpr)
+    -- just try to put at the start of all partitions...
+  --   data MaybeTrivial a
+  -- = Trivial !Bool
+  -- | NonTrivial !a
 
+    partitions' <- case partitions of
+      Trivial b -> pure (Trivial b)
+      NonTrivial (Partitions m) ->
+        pure (NonTrivial (Partitions (Map.mapKeys (prevSteps ++) m)))
+    
     -- Prepend network equalities to the tree (prepending is important for
     -- performance as the search for constraints will find them first.)
     networkEqPartitions <-
       logCompilerSection2 MidDetail "reduction of network equalities to assertion tree" $ networkEqualitiesToPartition networkInputEqualities
 
-    let finalPartitions = andTrivial andPartitions partitions networkEqPartitions
+    let finalPartitions = andTrivial andPartitions partitions' networkEqPartitions
 
     -- Solve for the user variable
     eliminateQuantifiedVariable finalPartitions userVar
@@ -112,7 +124,7 @@ compileBoolExpr expr = do
     VBoolIf args -> compileBoolExpr =<< unfoldIf args
     VAnd (TensorOp2Args _dims x y) -> andTrivial andPartitions <$> compileBoolExpr x <*> compileBoolExpr y
     VOr (TensorOp2Args _dims x y) -> orTrivial orPartitions <$> compileBoolExpr x <*> compileBoolExpr y
-    VQuantifyRatTensor (Exists, args) -> eliminateExists args
+    VQuantifyRatTensor (Exists, args) -> eliminateExists args []
     VQuantifyRecord (Exists, _args) -> compilerDeveloperError "LAUREN TODO: quantifyRecord case in compileBoolExpr"
     VCompareNat {} -> unblockAndRec expr
     VCompareIndex {} -> unblockAndRec expr

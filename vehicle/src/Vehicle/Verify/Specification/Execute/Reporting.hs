@@ -262,8 +262,17 @@ statusSymbol verified = do
 
 prettyUserVariableAssignment :: UserVariableAssignment -> Doc a
 prettyUserVariableAssignment (UserVariableAssignment assignment) = do
-  let prettyLine (var, value) = pretty var <> ":" <+> pretty value
+  -- let prettyLine (var, value) = pretty var <> ":" <+> pretty value
+  -- vsep (fmap prettyLine assignment)
   vsep (fmap prettyLine assignment)
+  where
+    prettyLine a = do
+      case a of 
+        TensorAssignment (var, value) -> pretty var <> ":" <+> pretty value
+        RecordAssignment (var, value) -> pretty var <> ":" <+> vsep (fmap (\(name, tens) -> pretty name <+> pretty tens) value)
+
+
+
 
 closeProgressBar :: (MonadStdIO m) => ProgressBar () -> m ()
 closeProgressBar _ = writeStdoutLn ""

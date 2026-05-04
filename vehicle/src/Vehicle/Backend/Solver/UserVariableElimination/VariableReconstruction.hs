@@ -82,6 +82,12 @@ applyReconstructionStep ctx assignment step = do
         SolveEquality nestedVar eq -> reconstructTensorViaEquality nestedVar eq
         SolveInequalities var solution -> reconstructRationalViaFourierMotzkin var solution
         ReconstructTensorVariable var depth -> reconstructTensorFromConstituents ctx var depth
+        -- do nothing if we have convertTensorLike
+        -- very bad, fix later if there is time...
+        ConvertQuantifiedTensorLike {} -> \ varAssignment->
+          case NonEmpty.nonEmpty (Map.toList varAssignment) of
+          Just a -> pure a
+          Nothing -> developerError "Variable assignment list should not be empty"
   newValues <- handleMissingError ctx (errorOrValueFn assignment)
 
   logDebugM MidDetail $ do
@@ -208,7 +214,7 @@ createFinalAssignment ::
   m UserVariableAssignment
 createFinalAssignment vehicleVariables userVariables assignment = do
   let userVariableValues = mapMaybe isUserVar $ Map.toList assignment
-  return $ UserVariableAssignment userVariableValues
+  return $ UserVariableAssignment (map (\var -> TensorAssignment var) userVariableValues)
   where
     isUserVar :: (SliceVariable, RatTensor) -> Maybe (Name, RatTensor)
     isUserVar (var, value) =

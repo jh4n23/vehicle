@@ -323,10 +323,15 @@ writeWitnessToFile :: (MonadVerify m) => FilePath -> PropertyAddress -> UserVari
 writeWitnessToFile verificationCache address (UserVariableAssignment assignments) = do
   let witnessFolder = verificationCache </> layoutAsString (pretty address) <> "-assignments"
   liftIO $ createDirectoryIfMissing True witnessFolder
-  forM_ assignments $ \(var, tensor) -> do
-    let file = witnessFolder </> layoutAsString (pretty var)
-    let dims = Vector.fromList (shapeOf tensor)
-    -- TODO got to be a better way to do this conversion...
-    let unboxedVector = Vector.fromList $ BoxedVector.toList (fmap realToFrac (Tensor.toVector tensor))
-    let idxData = IDXDoubles IDXDouble dims unboxedVector
-    liftIO $ encodeIDXFile idxData file
+  -- going to do a jank here
+  --forM_ assignments $ \(var, tensor) -> do
+  forM_ assignments $ \assignment -> do
+    case assignment of 
+      TensorAssignment (var, tensor) -> do
+        let file = witnessFolder </> layoutAsString (pretty var)
+        let dims = Vector.fromList (shapeOf tensor)
+        -- TODO got to be a better way to do this conversion...
+        let unboxedVector = Vector.fromList $ BoxedVector.toList (fmap realToFrac (Tensor.toVector tensor))
+        let idxData = IDXDoubles IDXDouble dims unboxedVector
+        liftIO $ encodeIDXFile idxData file
+      RecordAssignment {} -> developerError "ERROR: should not be any record user variables at this stage"
