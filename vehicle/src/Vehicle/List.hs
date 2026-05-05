@@ -21,7 +21,7 @@ import Vehicle.Compile.TypedView
 import Vehicle.Data.Builtin.Interface (Accessor (..))
 import Vehicle.Data.Builtin.Standard (Builtin (..), Quantifier)
 import Vehicle.Data.Code.Interface (QuantifyRatTensorArgs (..), accessQuantifyRatTensor)
-import Vehicle.Data.Code.Value (ForcedValue (..), Spine, VType, Value (..), emptyBoundEnv, thunkifyExpr)
+import Vehicle.Data.Code.Value (Spine, Thunk (..), VType, Value (..), emptyBoundEnv, thunkifyExpr)
 import Vehicle.Data.Variable.Bound.Context.Name
 import Vehicle.Data.Variable.Free.Context (MonadFreeContext, addDeclEntryToContext, runFreshFreeContextT)
 import Vehicle.Prelude.Logging.Instance
@@ -108,7 +108,7 @@ searchDecl decl = do
           tell [entity]
     DefRecord {} -> return ()
 
-searchPropertyDecl :: (MonadList m, MonadSupply PropertyID m) => DeclProvenance -> SharedData -> VType Builtin -> Value Builtin -> m ListableEntity
+searchPropertyDecl :: (MonadList m, MonadSupply PropertyID m) => DeclProvenance -> SharedData -> VType Builtin -> Thunk Builtin -> m ListableEntity
 searchPropertyDecl prov sharedData declType declBody = do
   propertyID <- demand
   traversalErrorOrResult <- traverseMultiProperty searchProperty propertyID (name sharedData) declType declBody
@@ -126,7 +126,7 @@ searchPropertyDecl prov sharedData declType declBody = do
         UnreducableTensorValue {} -> mkActualError
         UnreducableType {} -> mkActualError
 
-searchProperty :: (MonadList m) => PropertyAddress -> Value Builtin -> m [QuantifiedVariableSummary]
+searchProperty :: (MonadList m) => PropertyAddress -> Thunk Builtin -> m [QuantifiedVariableSummary]
 searchProperty _address value = runFreshNameBoundContextT $ execWriterT (searchValue value)
 
 type MonadListProperty m =
@@ -136,7 +136,7 @@ type MonadListProperty m =
   )
 
 -- | Traverse a value to find all quantified variables
-searchValue :: (MonadListProperty m) => Value Builtin -> m ()
+searchValue :: (MonadListProperty m) => Thunk Builtin -> m ()
 searchValue value = do
   forcedValue <- forceValue value
   case forcedValue of
@@ -160,7 +160,7 @@ searchValue value = do
 searchSpine :: (MonadListProperty m) => Spine Builtin -> m ()
 searchSpine = traverse_ (traverse_ searchValue)
 
-searchBuiltinForQuantifier :: (MonadListProperty m) => Value Builtin -> m ()
+searchBuiltinForQuantifier :: (MonadListProperty m) => Thunk Builtin -> m ()
 searchBuiltinForQuantifier value = do
   forcedValue <- forceValue value
   case getExpr accessQuantifyRatTensor forcedValue of

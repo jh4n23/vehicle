@@ -56,10 +56,10 @@ descopeExprInEmptyCtx = descopeExprNamed mempty
 descopeExprNamed :: (PrintableBuiltin builtin) => NamedBoundCtx -> Expr builtin -> S.Expr builtin
 descopeExprNamed ctx e = runNameBoundContext ctx $ genericDescopeExpr (ixToName Named) e
 
-descopeValueNamed :: (PrintableBuiltin builtin) => NamedBoundCtx -> Value builtin -> S.Expr builtin
+descopeValueNamed :: (PrintableBuiltin builtin) => NamedBoundCtx -> Thunk builtin -> S.Expr builtin
 descopeValueNamed ctx e = runNameBoundContext ctx $ descopeValue Named e
 
-descopeForcedValueNamed :: (PrintableBuiltin builtin) => NamedBoundCtx -> ForcedValue builtin -> S.Expr builtin
+descopeForcedValueNamed :: (PrintableBuiltin builtin) => NamedBoundCtx -> Value builtin -> S.Expr builtin
 descopeForcedValueNamed ctx e = runNameBoundContext ctx $ descopeForcedValue Named e
 
 -- Naive descoping
@@ -67,10 +67,10 @@ descopeForcedValueNamed ctx e = runNameBoundContext ctx $ descopeForcedValue Nam
 descopeExprNaively :: (PrintableBuiltin builtin) => Expr builtin -> S.Expr builtin
 descopeExprNaively e = runFreshNameBoundContext (genericDescopeExpr (ixToName Naive) e)
 
-descopeValueNaively :: (PrintableBuiltin builtin) => Value builtin -> S.Expr builtin
+descopeValueNaively :: (PrintableBuiltin builtin) => Thunk builtin -> S.Expr builtin
 descopeValueNaively e = runFreshNameBoundContext (descopeValue Naive e)
 
-descopeForcedValueNaively :: (PrintableBuiltin builtin) => ForcedValue builtin -> S.Expr builtin
+descopeForcedValueNaively :: (PrintableBuiltin builtin) => Value builtin -> S.Expr builtin
 descopeForcedValueNaively e = runFreshNameBoundContext (descopeForcedValue Naive e)
 
 --------------------------------------------------------------------------------
@@ -126,7 +126,7 @@ genericDescopeExpr f e = showDescopeExit $ case showDescopeEntry e of
     return $ S.RecordAcc p record' field
 
 --------------------------------------------------------------------------------
--- Value
+-- Thunk
 
 descopeClosure ::
   forall m binder builtin.
@@ -145,9 +145,9 @@ descopeThunk ::
   forall m builtin.
   (PrintableBuiltin builtin, MonadNameContext m) =>
   VarStrategy ->
-  Thunk builtin ->
+  UnevaluatedThunk builtin ->
   m (S.Expr builtin)
-descopeThunk f (Thunk env body) = do
+descopeThunk f (UnevaluatedThunk env body) = do
   body' <- genericDescopeExpr (ixToName f) body
   env' <- traverse (descopeValue f) (cheatEnvToValues env) :: m [S.Expr builtin]
   let envExpr = S.normAppList (S.Var mempty "ENV") $ fmap (Arg Explicit Relevant) env'
@@ -156,7 +156,7 @@ descopeThunk f (Thunk env body) = do
 descopeValue ::
   (MonadNameContext m, PrintableBuiltin builtin) =>
   VarStrategy ->
-  Value builtin ->
+  Thunk builtin ->
   m (S.Expr builtin)
 descopeValue f = \case
   Forced value -> descopeForcedValue f value
@@ -167,7 +167,7 @@ descopeValue f = \case
 descopeForcedValue ::
   (MonadNameContext m, PrintableBuiltin builtin) =>
   VarStrategy ->
-  ForcedValue builtin ->
+  Value builtin ->
   m (S.Expr builtin)
 descopeForcedValue f e = case e of
   VUniverse {} ->
@@ -202,10 +202,10 @@ descopeForcedValue f e = case e of
     p = mempty
 
 -- | Converts an environment to set of values suitable for printing
-cheatEnvToValues :: BoundEnv builtin -> GenericBoundCtx (Value builtin)
+cheatEnvToValues :: BoundEnv builtin -> GenericBoundCtx (Thunk builtin)
 cheatEnvToValues (BoundEnv env) = fmap entryToValue env
   where
-    entryToValue :: (GenericBinder (), EnvEntry builtin) -> Value builtin
+    entryToValue :: (GenericBinder (), EnvEntry builtin) -> Thunk builtin
     entryToValue (binder, entry) = do
       let ident = stdlibIdentifier (fromMaybe "_" (nameOf binder) <> " =")
       let arg = explicit $ case entry of

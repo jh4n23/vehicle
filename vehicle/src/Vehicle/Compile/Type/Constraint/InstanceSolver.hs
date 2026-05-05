@@ -191,7 +191,7 @@ getCandidatesInBoundCtx goal ctx = go ctx
 data SuccessfulInstanceCandidate builtin = SuccessfulInstanceCandidate
   { successfulCandidate :: WithContext (InstanceCandidate builtin),
     successfulState :: TypeCheckerState builtin,
-    successfulSolution :: Value builtin
+    successfulSolution :: Thunk builtin
   }
 
 -- | Checks whether a candidate is a possibility for the instance goal.
@@ -236,7 +236,7 @@ acceptCandidate ::
   WithContext (InstanceConstraint builtin) ->
   InstanceGoal builtin ->
   WithContext (InstanceCandidate builtin) ->
-  m (Value builtin)
+  m (Thunk builtin)
 acceptCandidate (WithContext Resolve {..} constraintCtx) goal candidate = do
   -- Allow the candidate to access all the arguments in the goal telescope.
   let goalCtxExtension = goalTelescope goal

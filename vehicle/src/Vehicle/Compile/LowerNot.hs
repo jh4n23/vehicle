@@ -9,7 +9,7 @@ import Vehicle.Compile.Normalise.Quote (Quote (..))
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyFriendly)
 import Vehicle.Compile.TypedView
-import Vehicle.Compile.TypedView.Core (CompilableBoolTensorValue (..))
+import Vehicle.Compile.TypedView.Core (BoolTensorExpr (..))
 import Vehicle.Data.Builtin.Interface
 import Vehicle.Data.Builtin.Interface.Normalise (unforcedBuiltinApp)
 import Vehicle.Data.Builtin.Standard
@@ -45,8 +45,7 @@ lowerNot (TensorOp1Args dims value) = do
     VBoolTensorNot args -> return $ tensorOp1Arg args
     VBoolTensorCompareIndex (op, args) -> return $ fromBoolTensorValue $ VBoolTensorCompareIndex (neg op, args)
     VBoolTensorCompareNat (op, args) -> return $ fromBoolTensorValue $ VBoolTensorCompareNat (neg op, args)
-    VBoolTensorCompareRatPointwise (op, args) -> return $ fromBoolTensorValue $ VBoolTensorCompareRatPointwise (neg op, args)
-    VBoolTensorCompareRatReduced (op, args) -> return $ fromBoolTensorValue $ VBoolTensorCompareRatReduced (neg op, args)
+    VBoolTensorCompareRat (op, args) -> return $ fromBoolTensorValue $ VBoolTensorCompareRat (neg op, args)
     -- We can't actually lower the `not` through the body of the quantifier as
     -- it is not yet unnormalised. However, it's fine to stop here as we'll
     -- simply continue to normalise it once we re-encounter it again after
@@ -71,63 +70,63 @@ lowerNot (TensorOp1Args dims value) = do
 
   return result
 
-negateValue :: Value Builtin -> Value Builtin -> Value Builtin
-negateValue dims v =
+negateThunk :: Thunk Builtin -> Thunk Builtin -> Thunk Builtin
+negateThunk dims v =
   unforcedBuiltinApp accessNotTensorBuiltin $
     TensorOp1Args
       { tensorOp1Dims = dims,
         tensorOp1Arg = v
       }
 
-negateOp2Args :: TensorOp2Args (Value Builtin) -> TensorOp2Args (Value Builtin)
+negateOp2Args :: TensorOp2Args (Thunk Builtin) -> TensorOp2Args (Thunk Builtin)
 negateOp2Args TensorOp2Args {..} =
   TensorOp2Args
     { tensorOp2Dims = tensorOp2Dims,
-      tensorOp2Arg1 = negateValue tensorOp2Dims tensorOp2Arg1,
-      tensorOp2Arg2 = negateValue tensorOp2Dims tensorOp2Arg2
+      tensorOp2Arg1 = negateThunk tensorOp2Dims tensorOp2Arg1,
+      tensorOp2Arg2 = negateThunk tensorOp2Dims tensorOp2Arg2
     }
 
-negateReductionArgs :: TensorReductionArgs (Value Builtin) -> TensorReductionArgs (Value Builtin)
+negateReductionArgs :: TensorReductionArgs (Thunk Builtin) -> TensorReductionArgs (Thunk Builtin)
 negateReductionArgs TensorReductionArgs {..} =
   TensorReductionArgs
     { tensorReductionDims = tensorReductionDims,
-      tensorReductionUnit = negateValue (Forced $ INil $ Forced INatType) tensorReductionUnit,
-      tensorReductionTensor = negateValue tensorReductionDims tensorReductionTensor
+      tensorReductionUnit = negateThunk (Forced $ INil $ Forced INatType) tensorReductionUnit,
+      tensorReductionTensor = negateThunk tensorReductionDims tensorReductionTensor
     }
 
-negateIfArgs :: VDims Builtin -> IfArgs (Value Builtin) -> IfArgs (Value Builtin)
+negateIfArgs :: VDims Builtin -> IfArgs (Thunk Builtin) -> IfArgs (Thunk Builtin)
 negateIfArgs dims IfArgs {..} =
   IfArgs
     { ifType = ifType,
       ifCond = ifCond,
-      ifArg1 = negateValue dims ifArg1,
-      ifArg2 = negateValue dims ifArg2
+      ifArg1 = negateThunk dims ifArg1,
+      ifArg2 = negateThunk dims ifArg2
     }
 
-negateConstTensorArgs :: ConstTensorArgs (Value Builtin) -> ConstTensorArgs (Value Builtin)
+negateConstTensorArgs :: ConstTensorArgs (Thunk Builtin) -> ConstTensorArgs (Thunk Builtin)
 negateConstTensorArgs ConstTensorArgs {..} =
   ConstTensorArgs
     { constType = constType,
-      constValue = negateValue (Forced $ INil $ Forced INatType) constValue,
+      constValue = negateThunk (Forced $ INil $ Forced INatType) constValue,
       constDims = constDims
     }
 
-negateStackTensorArgs :: StackTensorArgs (Value Builtin) -> StackTensorArgs (Value Builtin)
+negateStackTensorArgs :: StackTensorArgs (Thunk Builtin) -> StackTensorArgs (Thunk Builtin)
 negateStackTensorArgs StackTensorArgs {..} =
   StackTensorArgs
     { stackType = stackType,
       stackFirstDim = stackFirstDim,
       stackRemainingDims = stackRemainingDims,
-      stackElements = fmap (negateValue stackRemainingDims) stackElements
+      stackElements = fmap (negateThunk stackRemainingDims) stackElements
     }
 
-negateAtTensorArgs :: AtTensorArgs (Value Builtin) -> AtTensorArgs (Value Builtin)
+negateAtTensorArgs :: AtTensorArgs (Thunk Builtin) -> AtTensorArgs (Thunk Builtin)
 negateAtTensorArgs AtTensorArgs {..} =
   AtTensorArgs
     { atType = atType,
       atFirstDim = atFirstDim,
       atRemainingDims = atRemainingDims,
-      atTensor = negateValue (Forced $ ICons (Forced INatType) atFirstDim atRemainingDims) atTensor,
+      atTensor = negateThunk (Forced $ ICons (Forced INatType) atFirstDim atRemainingDims) atTensor,
       atIndex = atIndex
     }
 
@@ -137,8 +136,8 @@ negateAtTensorArgs AtTensorArgs {..} =
 -- normalising the quantifier.
 negateQuantifierBody ::
   (MonadDropNot m) =>
-  QuantifyRatTensorArgs (Value Builtin) ->
-  m (QuantifyRatTensorArgs (Value Builtin))
+  QuantifyRatTensorArgs (Thunk Builtin) ->
+  m (QuantifyRatTensorArgs (Thunk Builtin))
 negateQuantifierBody (QuantifyRatTensorArgs dims fn) = do
   let (binder, Closure env body) = accessQuantifierLambda fn
   lv <- getBinderDepth
@@ -153,8 +152,8 @@ negateQuantifierBody (QuantifyRatTensorArgs dims fn) = do
 
 negateForeachArgs ::
   (MonadDropNot m) =>
-  ForeachTensorArgs (Value Builtin) ->
-  m (ForeachTensorArgs (Value Builtin))
+  ForeachTensorArgs (Thunk Builtin) ->
+  m (ForeachTensorArgs (Thunk Builtin))
 negateForeachArgs (ForeachTensorArgs t dim dims fn) = do
   forcedFn <- forceValue fn
   (binder, Closure env body) <- case forcedFn of

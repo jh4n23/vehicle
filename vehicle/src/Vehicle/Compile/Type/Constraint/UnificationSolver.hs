@@ -23,6 +23,7 @@ import Prettyprinter (sep)
 import Vehicle.Compile.Error
 import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Normalise.Quote (unnormalise)
+import Vehicle.Compile.Normalise.Value (forceValue)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyExternal, prettyFriendly, prettyVerbose)
 import Vehicle.Compile.Type.Core
@@ -64,8 +65,8 @@ type MonadUnify builtin m =
 
 type UnificationProblem builtin =
   ( BoundCtx (Type builtin),
-    Value builtin,
-    Value builtin
+    Thunk builtin,
+    Thunk builtin
   )
 
 type ConstraintInfo builtin =
@@ -115,14 +116,14 @@ unify ::
   forall builtin m.
   (MonadUnify builtin m) =>
   BoundCtx (Type builtin) ->
-  Value builtin ->
-  Value builtin ->
+  Thunk builtin ->
+  Thunk builtin ->
   m (UnificationResult builtin)
 unify ctx e1 e2 = do
   -- Force the heads of both expressions
   let namedCtx = toNamedBoundCtx ctx
-  (fe1, e1BlockingMetas) <- runNameBoundContextT namedCtx $ deepForceValue e1
-  (fe2, e2BlockingMetas) <- runNameBoundContextT namedCtx $ deepForceValue e2
+  (fe1, e1BlockingMetas) <- runNameBoundContextT namedCtx $ forceValue e1
+  (fe2, e2BlockingMetas) <- runNameBoundContextT namedCtx $ forceValue e2
 
   -- Construct the new constraint information
   let blockingMetas = e1BlockingMetas <> e2BlockingMetas
@@ -150,8 +151,8 @@ instance Monoid (UnificationResult builtin) where
 subUnify ::
   (MonadUnify builtin m) =>
   ConstraintInfo builtin ->
-  Value builtin ->
-  Value builtin ->
+  Thunk builtin ->
+  Thunk builtin ->
   m (UnificationResult builtin)
 subUnify info = unify (infoBoundCtx info)
 
@@ -172,8 +173,8 @@ pattern x :~: y = (x, y)
 unification ::
   (MonadUnify builtin m) =>
   ConstraintInfo builtin ->
+  (Thunk builtin, Thunk builtin) ->
   (Value builtin, Value builtin) ->
-  (ForcedValue builtin, ForcedValue builtin) ->
   m (UnificationResult builtin)
 unification info (o1, o2) = \case
   -----------------------
@@ -247,8 +248,8 @@ solveSpine info args1 args2
 solveRecords ::
   (MonadUnify builtin m) =>
   ConstraintInfo builtin ->
-  SearchableRecordFields (Value builtin) ->
-  SearchableRecordFields (Value builtin) ->
+  SearchableRecordFields (Thunk builtin) ->
+  SearchableRecordFields (Thunk builtin) ->
   m (UnificationResult builtin)
 solveRecords info fields1 fields2 = do
   -- Note we don't need to check that the fields align as scope checking should have
@@ -265,7 +266,7 @@ solveClosure ::
   m (UnificationResult builtin)
 solveClosure info (binder1, body1) (binder2, body2) = do
   -- Unify binder constraints
-  binderConstraint <- subUnify info (Unforced $ typeOf binder1) (Unforced $ typeOf binder2)
+  binderConstraint <- subUnify info (typeOf binder1) (typeOf binder2)
 
   -- Unify the two bodies
   let ctx = toNamedBoundCtx $ infoBoundCtx info
@@ -310,7 +311,7 @@ solveFlexRigid ::
   (MonadUnify builtin m) =>
   ConstraintInfo builtin ->
   (MetaID, Spine builtin) ->
-  Value builtin ->
+  Thunk builtin ->
   m (UnificationResult builtin)
 solveFlexRigid info (metaID, spine) solution = do
   let ctx = infoBoundCtx info
@@ -330,7 +331,7 @@ solveFlexRigidWithRenaming ::
   BoundCtx (Type builtin) ->
   (MetaID, Spine builtin) ->
   Renaming ->
-  Value builtin ->
+  Thunk builtin ->
   m (UnificationResult builtin)
 solveFlexRigidWithRenaming ctx (metaID, metaSpine) renaming solution = do
   let unnormSolution = unnormalise (boundCtxLv ctx) solution

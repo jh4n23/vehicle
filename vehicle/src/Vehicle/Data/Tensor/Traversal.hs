@@ -15,7 +15,7 @@ import Vehicle.Data.Tensor (TensorIndices, TensorShape)
 -- resources, see MNIST robustness specification for an example)
 data PartiallyKnownTensorShape = PartiallyKnownTensorShape
   { knownPrefix :: TensorShape,
-    unknownSuffix :: ForcedValue Builtin
+    unknownSuffix :: Value Builtin
   }
 
 toPartialShape :: TensorShape -> PartiallyKnownTensorShape

@@ -159,7 +159,7 @@ data InstanceGoal builtin = InstanceGoal
   }
   deriving (Show)
 
-forcedGoalValue :: InstanceGoal builtin -> ForcedValue builtin
+forcedGoalValue :: InstanceGoal builtin -> Value builtin
 forcedGoalValue InstanceGoal {..} =
   case goalHead of
     Left ident -> VFreeVar ident goalSpine
@@ -263,8 +263,8 @@ data UnificationConstraintOrigin builtin
 data UnificationConstraint builtin
   = Unify
       (UnificationConstraintOrigin builtin)
-      (Value builtin)
-      (Value builtin)
+      (Thunk builtin)
+      (Thunk builtin)
   deriving (Show)
 
 type instance

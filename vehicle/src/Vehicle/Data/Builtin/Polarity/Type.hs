@@ -65,7 +65,7 @@ typeOfBuiltinFunction = \case
   -- Comparisons
   CompareNat {} -> typeOfOp2 maxPolarity
   CompareIndex {} -> typeOfOp2 maxPolarity
-  CompareRatTensorPointwise {} -> typeOfOp2 maxPolarity
+  CompareRatTensor {} -> _ -- typeOfOp2 maxPolarity
   -- Arithmetic operations
   Add {} -> typeOfUnquantifiedOp2
   Mul {} -> typeOfUnquantifiedOp2

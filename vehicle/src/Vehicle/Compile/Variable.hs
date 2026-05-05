@@ -7,12 +7,11 @@ where
 import Control.Monad (when)
 import Control.Monad.Except (MonadError (..))
 import Vehicle.Compile.Error
-import Vehicle.Compile.Normalise.NBE (forceThunk)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyVerbose)
-import Vehicle.Compile.TypedView
+import Vehicle.Compile.TypedView.Core (TypeExpr (..), forceTypeExpr)
 import Vehicle.Data.Builtin.Standard
-import Vehicle.Data.Code.Value (VBinder, Value (..))
+import Vehicle.Data.Code.Value (Thunk (..), VBinder)
 import Vehicle.Data.Variable.Bound.Context.Name
 import Vehicle.Data.Variable.Free.Context (MonadFreeContext)
 import Prelude hiding (Applicative (..))
@@ -30,7 +29,7 @@ createUserVar ::
   (MonadCreateUserVar m) =>
   DeclProvenance ->
   VBinder Builtin ->
-  m (Value Builtin)
+  m (Thunk Builtin)
 createUserVar propertyProvenance binder = do
   let varName = getBinderName binder
   checkUserVariableNameIsUnique propertyProvenance varName
@@ -52,9 +51,9 @@ checkUserVariableNameIsUnique propertyProvenance varName = do
 getUserVariableDims ::
   (MonadCreateUserVar m) =>
   VBinder Builtin ->
-  m (Value Builtin)
+  m (Thunk Builtin)
 getUserVariableDims binder = do
   forcedType <- forceTypeExpr (typeOf binder)
   case forcedType of
     VTensorType _tElem dims -> return dims
-    _ -> developerError $ "Unexpected quantifier type:" <+> prettyVerbose (Unforced $ typeOf binder)
+    _ -> developerError $ "Unexpected quantifier type:" <+> prettyVerbose (typeOf binder)

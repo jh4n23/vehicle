@@ -16,8 +16,8 @@ import Vehicle.Prelude
 
 type EquivalenceLaw args builtin m =
   (MonadNorm builtin m) =>
-  args (Value builtin) ->
-  m (Maybe (Value builtin))
+  args (Thunk builtin) ->
+  m (Maybe (Thunk builtin))
 
 ---------------
 -- reduceAnd --
@@ -55,10 +55,10 @@ liftForeach ::
   forall builtin m.
   (MonadNorm builtin m) =>
   Lv ->
-  Value builtin ->
+  Thunk builtin ->
   VType builtin ->
-  ForcedValue builtin ->
-  m (Maybe (Value builtin))
+  Value builtin ->
+  m (Maybe (Thunk builtin))
 liftForeach lv d typ forcedBody = do
   return $
     goOp1 liftableTensorOp1s
@@ -66,7 +66,7 @@ liftForeach lv d typ forcedBody = do
       <|> goAt
       <|> goLiterals tensorLiterals
   where
-    appForeach :: Value builtin -> Value builtin
+    appForeach :: Thunk builtin -> Thunk builtin
     appForeach newBody = do
       let newBody' = quote mempty (lv + 1) newBody
       let newLam = VLam binder (Closure (namedBoundContextToEnv ctx) newBody')
@@ -80,7 +80,7 @@ liftForeach lv d typ forcedBody = do
 
     -- Distribute the `forallIndex` across a liftable operation (e.g. `not`).
     -- e.g. `foreach i . op (x(i))` ---> `op (foreach i . x(i))`
-    goOp1 :: [TensorOpEvalData TensorOp1Args builtin] -> Maybe (Value builtin)
+    goOp1 :: [TensorOpEvalData TensorOp1Args builtin] -> Maybe (Thunk builtin)
     goOp1 = \case
       (accessOp1, evalOp1, typ) : remainingOp1s -> case getExpr accessOp1 forcedBody of
         Just (TensorOp1Args ds e) -> Just $ do
@@ -91,7 +91,7 @@ liftForeach lv d typ forcedBody = do
 
     -- Distribute the `forallIndex` across a liftable operation (e.g. `and`).
     -- `foreach i . x(i) op y(i)` ---> `(foreach i . x(i)) op (forall i . y(i))`
-    goOp2 :: [TensorOpEvalData TensorOp2Args builtin] -> Maybe (Value builtin)
+    goOp2 :: [TensorOpEvalData TensorOp2Args builtin] -> Maybe (Thunk builtin)
     goOp2 = \case
       (accessOp, evalOp, typ) : remainingOps -> case getExpr accessOp forcedBody of
         Just (TensorOp2Args ds e1 e2) -> Just $ do
@@ -104,13 +104,13 @@ liftForeach lv d typ forcedBody = do
 
     -- `foreach i . xs ! i` ---> `xs`
     -- TODO BUG here! xs may depend on i
-    goAt :: Maybe (Value builtin)
+    goAt :: Maybe (Thunk builtin)
     goAt = case getExpr accessAtTensor forcedBody of
       Just (AtTensorArgs _ _ _ xs (VBoundVar lv1 [])) | lv1 == lv -> _ -- Just xs
       _ -> Nothing
 
     -- `foreach i . c` ---> `broadcast i c`
-    goLiterals :: [TensorLiteralAccessor builtin] -> Maybe (Value builtin)
+    goLiterals :: [TensorLiteralAccessor builtin] -> Maybe (Thunk builtin)
     goLiterals literals = case literals of
       Wrapper Access {..} : remainingLiterals -> case (getExpr value, d) of
         (Just xs, INatLiteral dim) -> Just $ return $ Forced $ mkExpr $ extendTensor dim xs
@@ -133,7 +133,7 @@ evalAtTensor (AtTensorArgs t d ds tensor index) = do
     <|> goOp2 liftableTensorOp2s
     <|> goForeach
   where
-    recEvalAt :: Value builtin -> Value builtin
+    recEvalAt :: Thunk builtin -> Thunk builtin
     recEvalAt ys =
       unforcedBuiltinApp accessAtTensorBuiltin $
         AtTensorArgs
@@ -145,7 +145,7 @@ evalAtTensor (AtTensorArgs t d ds tensor index) = do
           }
 
     -- `(- xs) ! i` ---> `- (xs ! i)
-    goOp1 :: [TensorOpEvalData TensorOp1Args builtin] -> Maybe (Value builtin)
+    goOp1 :: [TensorOpEvalData TensorOp1Args builtin] -> Maybe (Thunk builtin)
     goOp1 = \case
       (accessOp1, evalOp1, _) : remainingOp1s -> case getExpr accessOp1 tensor of
         Just (TensorOp1Args _ xs) -> Just $ do
@@ -154,7 +154,7 @@ evalAtTensor (AtTensorArgs t d ds tensor index) = do
         _ -> goOp1 remainingOp1s
       [] -> Nothing
 
-    goOp2 :: ForcedValue builtin -> [TensorOpEvalData TensorOp2Args builtin] -> Maybe (m (Value builtin))
+    goOp2 :: Value builtin -> [TensorOpEvalData TensorOp2Args builtin] -> Maybe (m (Thunk builtin))
     goOp2 forcedBody = \case
       (accessOp2, evalOp2, _) : remainingOps2 -> case getExpr accessOp2 forcedBody of
         Just (TensorOp2Args _ xs ys) -> Just $ do
@@ -164,7 +164,7 @@ evalAtTensor (AtTensorArgs t d ds tensor index) = do
         _ -> goOp2 forcedBody remainingOps2
       _ -> Nothing
 
-    goForeach :: Maybe (m (Value builtin))
+    goForeach :: Maybe (m (Thunk builtin))
     goForeach = case getExpr accessForeachTensor tensor of
       Just (ForeachTensorArgs _ _ _ fn) -> Just $ do
         return $ UnforcedApp fn [explicit index]
@@ -182,7 +182,7 @@ evalReduceAndTensor args@(TensorReductionArgs dims e tensor) = case e of
   IBoolLiteral True -> go tensor
   _ -> unoptimisedEvalReduceAndTensor args
   where
-    go :: Value builtin -> m (Value builtin)
+    go :: Thunk builtin -> m (Thunk builtin)
     go = \case
       (getExpr accessAndTensor -> Just (TensorOp2Args ds xs ys)) -> do
         xs' <- go xs
@@ -199,8 +199,8 @@ evalReduceAndTensor args@(TensorReductionArgs dims e tensor) = case e of
 -- For example `foreach i . xs ! i + ys ! i` becomes `xs + ys`.
 fuseReduceAndForeachTensor ::
   (MonadNorm builtin m, PrintableBuiltin builtin, NormalisableBuiltin builtin, BuiltinHasNatType builtin, BuiltinHasIndexLiterals builtin, BuiltinHasForeach builtin, BuiltinHasTensors builtin, BuiltinHasListLiterals builtin, BuiltinHasNatLiterals builtin, BuiltinHasBoolLiterals builtin, HasLiftableTensorOperations builtin) =>
-  Value builtin ->
-  m (Maybe (VDims builtin, Value builtin))
+  Thunk builtin ->
+  m (Maybe (VDims builtin, Thunk builtin))
 fuseReduceAndForeachTensor value = do
   case getExpr accessForeachTensor value of
     Just (ForeachTensorArgs typ d _ (VLam binder (Closure env body))) -> do

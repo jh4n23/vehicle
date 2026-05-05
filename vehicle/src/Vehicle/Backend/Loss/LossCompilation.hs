@@ -29,11 +29,11 @@ module Vehicle.Backend.Loss.LossCompilation
 where
 
 import Vehicle.Backend.Loss.Core hiding (currentPass)
-import Vehicle.Compile.Normalise.NBE (forceValue)
 import Vehicle.Compile.Normalise.Quote (Quote (..))
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Compile.TypedView
+import Vehicle.Compile.TypedView.Core
 import Vehicle.Data.Builtin.Interface (Accessor (..), BuiltinHasTensors (accessConstTensorBuiltin))
 import Vehicle.Data.Builtin.Interface.Normalise
 import Vehicle.Data.Builtin.Loss
@@ -59,9 +59,9 @@ convertType typ = logConversion typ $ do
   case toTypeValue forcedType of
     VPiType binder closure -> convertPiType binder closure
     VUnitType {} -> unexpectedOperation "unit type"
-    VFreeTypeVar {} -> unexpectedOperation "free var type"
+    VTypeFreeVar {} -> unexpectedOperation "free var type"
     VBoolType -> convertBoolType
-    VBoundTypeVar lv spine -> convertBoundVar lv spine
+    VTypeBoundVar lv spine -> convertBoundVar lv spine
     VRatType -> return $ Forced IRatType
     VIndexType n -> Forced . IIndexType <$> convertDim n
     VNatType -> return $ Forced INatType
@@ -86,8 +86,8 @@ convertPiType binder closure = do
 
 convertDim ::
   (MonadLogic m) =>
-  Value Builtin ->
-  m (Value LossBuiltin)
+  Thunk Builtin ->
+  m (Thunk LossBuiltin)
 convertDim value = logConversion value $ do
   forcedValue <- forceValue value
   case toNatValue forcedValue of
@@ -118,9 +118,9 @@ convertDims value = logConversion value $ do
 
 convertFunction ::
   (MonadLogic m) =>
-  (Value Builtin -> m (Value LossBuiltin)) ->
-  Value Builtin ->
-  m (Value LossBuiltin)
+  (Thunk Builtin -> m (Thunk LossBuiltin)) ->
+  Thunk Builtin ->
+  m (Thunk LossBuiltin)
 convertFunction convertValue value = do
   forcedValue <- forceValue value
   case forcedValue of
@@ -132,7 +132,7 @@ convertFunction convertValue value = do
 
 convertClosure ::
   (MonadLogic m) =>
-  (Value Builtin -> m (Value LossBuiltin)) ->
+  (Thunk Builtin -> m (Thunk LossBuiltin)) ->
   VBinder Builtin ->
   Closure Builtin ->
   m (Closure LossBuiltin)
@@ -152,7 +152,7 @@ convertBoundVar ::
   (MonadLogic m) =>
   Lv ->
   Spine Builtin ->
-  m (Value LossBuiltin)
+  m (Thunk LossBuiltin)
 convertBoundVar lv = \case
   _ : _ -> unexpectedExprError currentPass "bound function variables"
   [] -> do
@@ -168,7 +168,7 @@ convertFreeVar ::
   (MonadLogic m) =>
   Identifier ->
   Spine Builtin ->
-  m (Value LossBuiltin)
+  m (Thunk LossBuiltin)
 convertFreeVar name = \case
   [] -> return $ Forced $ VFreeVar name []
   spine -> case getExpr accessSpine spine of
@@ -180,7 +180,7 @@ convertFreeVar name = \case
 --------------------------------------------------------------------------------
 -- Bool
 
-convertBoolTensor :: (MonadLogic m) => Value Builtin -> m (Value LossBuiltin)
+convertBoolTensor :: (MonadLogic m) => Thunk Builtin -> m (Thunk LossBuiltin)
 convertBoolTensor value = logConversion value $ do
   forcedValue <- forceValue value
   case toBoolTensorValue forcedValue of
@@ -201,7 +201,7 @@ convertBoolTensor value = logConversion value $ do
     VBoolTensorAt args -> convertAtTensor convertBoolTensor args
     VBoolTensorForeach args -> convertForeachTensor convertBoolTensor args
 
-convertBoolTensorLiteral :: (MonadLogic m) => Tensor Bool -> m (Value LossBuiltin)
+convertBoolTensorLiteral :: (MonadLogic m) => Tensor Bool -> m (Thunk LossBuiltin)
 convertBoolTensorLiteral tensor = do
   trueExpr <- getLogicField TruthityElement
   falseExpr <- getLogicField FalsityElement
@@ -218,47 +218,47 @@ convertBoolTensorLiteral tensor = do
               }
   return $ foldMapTensor convertBool foldLayer tensor
 
-convertNot :: (MonadLogic m) => TensorOp1Args (Value LossBuiltin) -> m (Value LossBuiltin)
+convertNot :: (MonadLogic m) => TensorOp1Args (Thunk LossBuiltin) -> m (Thunk LossBuiltin)
 convertNot = convertLogicField PointwiseNegation
 
-convertAnd :: (MonadLogic m) => TensorOp2Args (Value LossBuiltin) -> m (Value LossBuiltin)
+convertAnd :: (MonadLogic m) => TensorOp2Args (Thunk LossBuiltin) -> m (Thunk LossBuiltin)
 convertAnd = convertLogicField PointwiseConjunction
 
-convertOr :: (MonadLogic m) => TensorOp2Args (Value LossBuiltin) -> m (Value LossBuiltin)
+convertOr :: (MonadLogic m) => TensorOp2Args (Thunk LossBuiltin) -> m (Thunk LossBuiltin)
 convertOr = convertLogicField PointwiseDisjunction
 
-convertReduceAnd :: (MonadLogic m) => TensorReductionArgs (Value LossBuiltin) -> m (Value LossBuiltin)
+convertReduceAnd :: (MonadLogic m) => TensorReductionArgs (Thunk LossBuiltin) -> m (Thunk LossBuiltin)
 convertReduceAnd = convertLogicField ReduceConjunction
 
-convertReduceOr :: (MonadLogic m) => TensorReductionArgs (Value LossBuiltin) -> m (Value LossBuiltin)
+convertReduceOr :: (MonadLogic m) => TensorReductionArgs (Thunk LossBuiltin) -> m (Thunk LossBuiltin)
 convertReduceOr = convertLogicField ReduceDisjunction
 
-convertNatComparison :: (MonadLogic m) => (ComparisonOp, Op2Args (Value Builtin)) -> m (Value LossBuiltin)
+convertNatComparison :: (MonadLogic m) => (ComparisonOp, Op2Args (Thunk Builtin)) -> m (Thunk LossBuiltin)
 convertNatComparison _args = unsupportedOperation "NatComparison"
 
-convertIndexComparison :: (MonadLogic m) => (ComparisonOp, IndexComparisonArgs (Value Builtin)) -> m (Value LossBuiltin)
+convertIndexComparison :: (MonadLogic m) => (ComparisonOp, IndexComparisonArgs (Thunk Builtin)) -> m (Thunk LossBuiltin)
 convertIndexComparison _args = unsupportedOperation "IndexComparison"
 
-convertRatTensorPointwiseComparison :: (MonadLogic m) => (ComparisonOp, TensorOp2Args (Value Builtin)) -> m (Value LossBuiltin)
+convertRatTensorPointwiseComparison :: (MonadLogic m) => (ComparisonOp, TensorOp2Args (Thunk Builtin)) -> m (Thunk LossBuiltin)
 convertRatTensorPointwiseComparison (op, args) = do
   args' <- convertTensorOp2 convertRatTensor args
   convertLogicField (comparisonOpToField op) args'
 
-convertRatTensorReducedComparison :: (MonadLogic m) => (ComparisonOp, TensorReduceComparisonArgs (Value Builtin)) -> m (Value LossBuiltin)
+convertRatTensorReducedComparison :: (MonadLogic m) => (ComparisonOp, TensorReduceComparisonArgs (Thunk Builtin)) -> m (Thunk LossBuiltin)
 convertRatTensorReducedComparison (op, args) =
   unsupportedOperation $ "RatTensorCompareReduced" <+> pretty op <+> prettyVerbose (mkExpr accessSpine args)
 
 convertIf ::
   (MonadLogic m) =>
-  IfArgs (Value Builtin) ->
-  m (Value LossBuiltin)
+  IfArgs (Thunk Builtin) ->
+  m (Thunk LossBuiltin)
 convertIf _args = unsupportedOperation "if"
 
 convertLogicField ::
   (MonadLogic m, IsArgs args) =>
   TensorDifferentiableLogicField ->
-  args (Value LossBuiltin) ->
-  m (Value LossBuiltin)
+  args (Thunk LossBuiltin) ->
+  m (Thunk LossBuiltin)
 convertLogicField field args = do
   fn <- getLogicField field
   logDebugM MaxDetail $ do
@@ -271,8 +271,8 @@ convertLogicField field args = do
 
 convertIndex ::
   (MonadLogic m) =>
-  Value Builtin ->
-  m (Value LossBuiltin)
+  Thunk Builtin ->
+  m (Thunk LossBuiltin)
 convertIndex value = logConversion value $ do
   forcedValue <- forceValue value
   case toIndexValue forcedValue of
@@ -285,8 +285,8 @@ convertIndex value = logConversion value $ do
 
 convertRatTensor ::
   (MonadLogic m) =>
-  Value Builtin ->
-  m (Value LossBuiltin)
+  Thunk Builtin ->
+  m (Thunk LossBuiltin)
 convertRatTensor value = logConversion value $ do
   forcedValue <- forceValue value
   case toRatTensorValue forcedValue of
@@ -318,10 +318,10 @@ convertRatTensor value = logConversion value $ do
 
 convertVecLiteralArgs ::
   (MonadLogic m) =>
-  (Value Builtin -> m (Value LossBuiltin)) ->
+  (Thunk Builtin -> m (Thunk LossBuiltin)) ->
   (VType Builtin, VDims Builtin) ->
-  VecLitArgs (Value Builtin) ->
-  m (Value LossBuiltin)
+  VecLitArgs (Thunk Builtin) ->
+  m (Thunk LossBuiltin)
 convertVecLiteralArgs convertValue (elemType, dims) (VecLitArgs _typ dim xs) = do
   convertStackTensor convertValue $
     StackTensorArgs
@@ -333,10 +333,10 @@ convertVecLiteralArgs convertValue (elemType, dims) (VecLitArgs _typ dim xs) = d
 
 convertVecForeachArgs ::
   (MonadLogic m) =>
-  (Value Builtin -> m (Value LossBuiltin)) ->
+  (Thunk Builtin -> m (Thunk LossBuiltin)) ->
   (VType Builtin, VDims Builtin) ->
-  ForeachVectorArgs (Value Builtin) ->
-  m (Value LossBuiltin)
+  ForeachVectorArgs (Thunk Builtin) ->
+  m (Thunk LossBuiltin)
 convertVecForeachArgs convertValue (elemType, dims) (ForeachVectorArgs _typ dim xs) =
   convertForeachTensor convertValue $
     ForeachTensorArgs
@@ -351,33 +351,33 @@ convertVecForeachArgs convertValue (elemType, dims) (ForeachVectorArgs _typ dim 
 
 convertTensorOp1 ::
   (MonadLogic m) =>
-  (Value Builtin -> m (Value LossBuiltin)) ->
-  TensorOp1Args (Value Builtin) ->
-  m (TensorOp1Args (Value LossBuiltin))
+  (Thunk Builtin -> m (Thunk LossBuiltin)) ->
+  TensorOp1Args (Thunk Builtin) ->
+  m (TensorOp1Args (Thunk LossBuiltin))
 convertTensorOp1 go (TensorOp1Args dims xs) =
   TensorOp1Args <$> convertDims dims <*> go xs
 
 convertTensorOp2 ::
   (MonadLogic m) =>
-  (Value Builtin -> m (Value LossBuiltin)) ->
-  TensorOp2Args (Value Builtin) ->
-  m (TensorOp2Args (Value LossBuiltin))
+  (Thunk Builtin -> m (Thunk LossBuiltin)) ->
+  TensorOp2Args (Thunk Builtin) ->
+  m (TensorOp2Args (Thunk LossBuiltin))
 convertTensorOp2 go (TensorOp2Args dims xs ys) =
   TensorOp2Args <$> convertDims dims <*> go xs <*> go ys
 
 convertTensorReduction ::
   (MonadLogic m) =>
-  (Value Builtin -> m (Value LossBuiltin)) ->
-  TensorReductionArgs (Value Builtin) ->
-  m (TensorReductionArgs (Value LossBuiltin))
+  (Thunk Builtin -> m (Thunk LossBuiltin)) ->
+  TensorReductionArgs (Thunk Builtin) ->
+  m (TensorReductionArgs (Thunk LossBuiltin))
 convertTensorReduction go (TensorReductionArgs dims e xs) =
   TensorReductionArgs <$> convertDims dims <*> go e <*> go xs
 
 convertAtTensor ::
   (MonadLogic m) =>
-  (Value Builtin -> m (Value LossBuiltin)) ->
-  AtTensorArgs (Value Builtin) ->
-  m (Value LossBuiltin)
+  (Thunk Builtin -> m (Thunk LossBuiltin)) ->
+  AtTensorArgs (Thunk Builtin) ->
+  m (Thunk LossBuiltin)
 convertAtTensor convertValue (AtTensorArgs typ dim dims xs i) = do
   type' <- convertType typ
   dim' <- convertDim dim
@@ -388,9 +388,9 @@ convertAtTensor convertValue (AtTensorArgs typ dim dims xs i) = do
 
 convertStackTensor ::
   (MonadLogic m) =>
-  (Value Builtin -> m (Value LossBuiltin)) ->
-  StackTensorArgs (Value Builtin) ->
-  m (Value LossBuiltin)
+  (Thunk Builtin -> m (Thunk LossBuiltin)) ->
+  StackTensorArgs (Thunk Builtin) ->
+  m (Thunk LossBuiltin)
 convertStackTensor convertValue (StackTensorArgs typ dim dims xs) = do
   type' <- convertType typ
   dim' <- convertDim dim
@@ -400,9 +400,9 @@ convertStackTensor convertValue (StackTensorArgs typ dim dims xs) = do
 
 convertConstTensor ::
   (MonadLogic m) =>
-  (Value Builtin -> m (Value LossBuiltin)) ->
-  ConstTensorArgs (Value Builtin) ->
-  m (Value LossBuiltin)
+  (Thunk Builtin -> m (Thunk LossBuiltin)) ->
+  ConstTensorArgs (Thunk Builtin) ->
+  m (Thunk LossBuiltin)
 convertConstTensor convertValue (ConstTensorArgs typ value dims) = do
   type' <- convertType typ
   value' <- convertValue value
@@ -411,9 +411,9 @@ convertConstTensor convertValue (ConstTensorArgs typ value dims) = do
 
 convertForeachTensor ::
   (MonadLogic m) =>
-  (Value Builtin -> m (Value LossBuiltin)) ->
-  ForeachTensorArgs (Value Builtin) ->
-  m (Value LossBuiltin)
+  (Thunk Builtin -> m (Thunk LossBuiltin)) ->
+  ForeachTensorArgs (Thunk Builtin) ->
+  m (Thunk LossBuiltin)
 convertForeachTensor convertValue (ForeachTensorArgs t dim dims fn) = do
   t' <- convertType t
   dim' <- convertDim dim
@@ -429,9 +429,9 @@ currentPass = "logic translation"
 
 logConversion ::
   (MonadLogger m, MonadReadableNameContext m) =>
-  Value Builtin ->
-  m (Value LossBuiltin) ->
-  m (Value LossBuiltin)
+  Thunk Builtin ->
+  m (Thunk LossBuiltin) ->
+  m (Thunk LossBuiltin)
 logConversion e action = do
   logDebugM MaxDetail $ do
     inputDoc <- prettyFriendlyInCtx e

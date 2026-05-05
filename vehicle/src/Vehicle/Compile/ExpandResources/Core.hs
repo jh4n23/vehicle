@@ -31,7 +31,7 @@ type InferableParameterEntry = (DeclProvenance, ExternalResource, Int)
 
 type InferableParameterContext = Map Identifier (Provenance, Type Builtin, Maybe InferableParameterEntry)
 
-type ExplicitParameterContext = Map Identifier (Value Builtin)
+type ExplicitParameterContext = Map Identifier (Thunk Builtin)
 
 --------------------------------------------------------------------------------
 -- The resource monad
@@ -130,7 +130,7 @@ findNonInferableParameterValue p ident = do
 noteNonInferableParameter ::
   (MonadExpandResources m) =>
   Identifier ->
-  Value Builtin ->
+  Thunk Builtin ->
   m ()
 noteNonInferableParameter ident value =
   modify $ \ExpandResourcesState {..} ->

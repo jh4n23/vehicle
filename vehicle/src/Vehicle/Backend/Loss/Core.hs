@@ -53,7 +53,7 @@ getDeclProvenance = do
   (prov, _, _) <- ask
   return prov
 
-getLogicField :: (MonadLogic m) => TensorDifferentiableLogicField -> m (Value LossBuiltin)
+getLogicField :: (MonadLogic m) => TensorDifferentiableLogicField -> m (Thunk LossBuiltin)
 getLogicField field = do
   (logic, _) <- getLogic
   lookupLogicField field logic

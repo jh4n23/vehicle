@@ -32,7 +32,7 @@ prettyExternalInCtx e = prettyExternal . WithContext e <$> getNameContext
 debugFriendly :: (MonadReadableNameContext m, PrettyFriendly (Contextualised a NamedBoundCtx), MonadLogger m) => a -> m ()
 debugFriendly value = logDebugM MaxDetail $ prettyFriendlyInCtx value
 
-extendClosureWithBound :: (MonadReadableNameContext m) => VBinder builtin -> Closure builtin -> m (Value builtin)
+extendClosureWithBound :: (MonadReadableNameContext m) => VBinder builtin -> Closure builtin -> m (Thunk builtin)
 extendClosureWithBound binder (Closure env body) = do
   ctxSize <- getBinderDepth
-  return $ Unforced $ Thunk (extendEnvWithBound ctxSize binder env) body
+  return $ Unforced $ UnevaluatedThunk (extendEnvWithBound ctxSize binder env) body

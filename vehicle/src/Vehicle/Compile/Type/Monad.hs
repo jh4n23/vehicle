@@ -41,13 +41,12 @@ where
 import Control.Monad (unless, when)
 import Control.Monad.Except (MonadError (..), runExceptT)
 import Control.Monad.Trans.Except (ExceptT)
-import Control.Monad.Writer (MonadTrans (..), MonadWriter, WriterT (..))
+import Control.Monad.Writer (MonadTrans (..))
 import Data.List (partition, sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (isJust)
 import Data.Proxy (Proxy (..))
 import Vehicle.Compile.Error (CompileError (..), TypingError (..), compilerDeveloperError)
-import Vehicle.Compile.Normalise.Core
 import Vehicle.Compile.Normalise.Quote (Quote (..), unnormalise)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (PrettyExternal, prettyExternal, prettyVerbose)
@@ -168,7 +167,7 @@ createDerivedInstanceConstraint ::
   (MonadTypeChecker builtin m) =>
   (ConstraintContext builtin, InstanceConstraintOrigin builtin) ->
   Relevance ->
-  Value builtin ->
+  Thunk builtin ->
   m (Expr builtin, WithContext (InstanceConstraint builtin))
 createDerivedInstanceConstraint (ctx, origin) r t = do
   let p = provenanceOf ctx
@@ -189,7 +188,7 @@ createDerivedInstanceConstraint (ctx, origin) r t = do
 parseInstanceGoal ::
   (MonadTypeChecker builtin m) =>
   NamedBoundCtx ->
-  Value builtin ->
+  Thunk builtin ->
   m (InstanceGoal builtin)
 parseInstanceGoal ctx originalValue =
   runNameBoundContextT ctx $ go [] originalValue
@@ -197,7 +196,7 @@ parseInstanceGoal ctx originalValue =
     go ::
       (MonadTypeChecker builtin m, MonadReadableNameContext m) =>
       Telescope builtin ->
-      Value builtin ->
+      Thunk builtin ->
       m (InstanceGoal builtin)
     go telescope expr = do
       forcedExpr <- forceValue expr
@@ -415,7 +414,7 @@ instantiateTelescope createFreshInstance boundCtx (telescopeType, telescopeBody)
   runNameBoundContextT (toNamedBoundCtx boundCtx) $ go (telescopeTypeValue, telescopeBodyValue)
   where
     go ::
-      (VType builtin, Value builtin) ->
+      (VType builtin, Thunk builtin) ->
       NameBoundContextT m (VType builtin, Expr builtin, [Arg builtin])
     go (typ, value) = do
       forcedType <- forceValue typ
@@ -442,12 +441,12 @@ instantiateTelescope createFreshInstance boundCtx (telescopeType, telescopeBody)
           return (typ, finalBody, [])
 
 {-
-deepForceValue :: (MonadTypeChecker builtin m) => Value builtin -> m (ForcedValue builtin, MetaSet)
-deepForceValue value = do
+forceValue :: (MonadTypeChecker builtin m) => Thunk builtin -> m (Value builtin, MetaSet)
+forceValue value = do
   forcedValue <- forceValue value
   runWriterT (deepForceForcedValue forcedValue)
 
-deepForceForcedValue :: (MonadNorm builtin m, MonadWriter MetaSet m) => ForcedValue builtin -> m (ForcedValue builtin)
+deepForceForcedValue :: (MonadNorm builtin m, MonadWriter MetaSet m) => Value builtin -> m (Value builtin)
 deepForceForcedValue = \case
   VMeta m spine -> _
   VBuiltin b spine -> _

@@ -53,7 +53,7 @@ data PropertyMetaData = PropertyMetaData
 data NetworkApplicationInfo = NetworkApplicationInfo
   { inputVariable :: NetworkInputTensorVariable,
     outputVariable :: NetworkOutputTensorVariable,
-    inputValue :: Value Builtin
+    inputValue :: Thunk Builtin
   }
 
 type NetworkApplications = Map NetworkName (NonEmpty NetworkApplicationInfo)
@@ -125,8 +125,8 @@ addNetworkApplicationToGlobalCtx ::
   (MonadQueryStructure m) =>
   Name ->
   NetworkContextInfo ->
-  Value Builtin ->
-  m (Value Builtin, Value Builtin)
+  Thunk Builtin ->
+  m (Thunk Builtin, Thunk Builtin)
 addNetworkApplicationToGlobalCtx name networkInfo arg = do
   -- Can't current track network application provenance
   let p = mempty

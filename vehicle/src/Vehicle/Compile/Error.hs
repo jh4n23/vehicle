@@ -91,7 +91,7 @@ data RelevantUseOfIrrelevantVariableError builtin = RelevantUseOfIrrelevantVaria
 data FunctionTypeMismatchError builtin = FunctionTypeMismatchError
   { _ctx :: NamedBoundCtx,
     originalFunction :: Expr builtin,
-    currentExpectedType :: Value builtin,
+    currentExpectedType :: Thunk builtin,
     currentUncheckedArgs :: [Arg builtin]
   }
   deriving (Show)
@@ -118,7 +118,7 @@ data TypingError builtin
   | FailedUnificationConstraints (FailedUnificationConstraintsError builtin)
   | FailedInstanceConstraint (FailedInstanceConstraintError builtin)
   | FailedIndexConstraintTooBig (ConstraintContext builtin) Int Int
-  | FailedIndexConstraintUnknown (ConstraintContext builtin) (Value builtin) (VType builtin)
+  | FailedIndexConstraintUnknown (ConstraintContext builtin) (Thunk builtin) (VType builtin)
   | UnsolvedConstraints (NonEmpty (WithContext (Constraint builtin)))
   | UnsolvedMetas (Proxy builtin) (NonEmpty (MetaID, Provenance))
   | InvalidInstanceHead DeclProvenance (Expr builtin)
@@ -129,10 +129,10 @@ data TypingError builtin
 -- MultiPropertyTraveralError
 
 data MultiPropertyTraveralError
-  = UnsupportedVectorDimension (Value Builtin)
-  | UnsupportedVectorValue (Value Builtin)
-  | UnsupportedTensorDimensions (Value Builtin)
-  | UnreducableTensorValue (Value Builtin)
+  = UnsupportedVectorDimension (Thunk Builtin)
+  | UnsupportedVectorValue (Thunk Builtin)
+  | UnsupportedTensorDimensions (Thunk Builtin)
+  | UnreducableTensorValue (Thunk Builtin)
   | UnreducableType (VType Builtin)
   deriving (Show)
 
@@ -203,7 +203,7 @@ data CompileError
   | DatasetInvalidIndex DeclProvenance FilePath Int Int
   | DatasetInvalidNat DeclProvenance FilePath Int
   | -- Unsupported parameters
-    ParameterTypeVariableSizeIndex DeclProvenance (Type Builtin) (Value Builtin)
+    ParameterTypeVariableSizeIndex DeclProvenance (Type Builtin) (Thunk Builtin)
   | ParameterTypeInferableParameterIndex DeclProvenance Identifier
   | ParameterValueUnparsable DeclProvenance String BuiltinType
   | ParameterValueInvalidIndex DeclProvenance Int Int
@@ -218,18 +218,18 @@ data CompileError
   | UnsupportedAlternatingQuantifiers QueryFormatID DeclProvenance (Either CompileError (Quantifier, Provenance, PolarityProvenance))
   | DuplicateQuantifierNames DeclProvenance Name
   | UnsupportedNonLinearConstraint QueryFormatID DeclProvenance (Either CompileError NonLinearityProof)
-  | UnsupportedMultipleNetworkApplications QueryFormatID DeclProvenance CompleteNamedBoundCtx [(NetworkName, Value Builtin)]
+  | UnsupportedMultipleNetworkApplications QueryFormatID DeclProvenance CompleteNamedBoundCtx [(NetworkName, Thunk Builtin)]
   | VariableSizeTensorQuantification DeclProvenance NamedBoundCtx (VBinder Builtin) (VType Builtin)
   | MultiPropertyTraveralError DeclProvenance MultiPropertyTraveralError
-  | UnboundedNetworkInputVariables DeclProvenance CompleteNamedBoundCtx (NonEmpty (NetworkName, Value Builtin, [Lv], UnboundedIndices))
+  | UnboundedNetworkInputVariables DeclProvenance CompleteNamedBoundCtx (NonEmpty (NetworkName, Thunk Builtin, [Lv], UnboundedIndices))
   | -- Loss backend errors
     UnknownDifferentiableLogic Name [Name]
   | UnreducableDifferentiableLogic DeclProvenance
   | UnsupportedLossOperation DeclProvenance (Doc Void)
-  | UnsupportedHigherOrderTensorCode DeclProvenance NamedBoundCtx (Value Builtin) NamedBoundCtx (Value Builtin)
-  | UnableToLiftLogicFieldToTensors DifferentiableLogicID TensorDifferentiableLogicField (BooleanDifferentiableLogicField, Value Builtin) NamedBoundCtx (Value Builtin)
+  | UnsupportedHigherOrderTensorCode DeclProvenance NamedBoundCtx (Thunk Builtin) NamedBoundCtx (Thunk Builtin)
+  | UnableToLiftLogicFieldToTensors DifferentiableLogicID TensorDifferentiableLogicField (BooleanDifferentiableLogicField, Thunk Builtin) NamedBoundCtx (Thunk Builtin)
   | NoQuantifierDomainFound DeclProvenance (VBinder Builtin) (These (NonEmpty TensorIndices) (NonEmpty TensorIndices))
-  | UnorderableDifferentiableLogic DeclProvenance (Value Builtin)
+  | UnorderableDifferentiableLogic DeclProvenance (Thunk Builtin)
   | -- ITP backend errors
     UnimplementedFeature Provenance (Doc Void)
   | UnusedMonomorphisableDeclaration Provenance Identifier

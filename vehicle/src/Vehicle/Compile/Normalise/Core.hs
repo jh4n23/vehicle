@@ -26,8 +26,8 @@ type BlockingArgs arg builtin = [arg builtin]
 data DetailedBuiltinEvaluationResult builtin
   = InsufficientArgs
   | DoesNotReduce
-  | Blocked (BlockingArgs ForcedValue builtin)
-  | EvaluationResult (Value builtin)
+  | Blocked (BlockingArgs Value builtin)
+  | EvaluationResult (Thunk builtin)
 
 data BuiltinEvaluationResult expr arg builtin
   = Evaluated (expr builtin)
@@ -35,8 +35,8 @@ data BuiltinEvaluationResult expr arg builtin
 
 type StandardBuiltinEvaluationScheme args builtin m =
   (IsArgs args) =>
-  args (Value builtin) ->
-  m (BuiltinEvaluationResult Value ForcedValue builtin)
+  args (Thunk builtin) ->
+  m (BuiltinEvaluationResult Thunk Value builtin)
 
 data BuiltinEvaluationScheme builtin
   = forall args. (IsArgs args) => StandardEvaluation (forall m. (MonadNorm builtin m) => StandardBuiltinEvaluationScheme args builtin m)
@@ -54,57 +54,57 @@ class (PrintableBuiltin builtin) => NormalisableBuiltin builtin where
   isDerivedBuiltin :: builtin -> Maybe Identifier
 
 class (Monad m) => TypedEvalScheme expr builtin m where
-  forceBuiltin :: builtin -> Args builtin -> m expr
-  forceMeta :: MetaID -> Args builtin -> m expr
+  forceBuiltin :: builtin -> Spine builtin -> m expr
+  forceMeta :: MetaID -> (Spine builtin) -> m expr
 
   handleUniverse :: Proxy builtin -> Maybe (UniverseLevel -> m expr)
-  handleBoundVar :: Lv -> Args builtin -> m expr
-  handlePi :: Maybe (Binder builtin -> Closure builtin -> m expr)
-  handleLam :: Maybe (Binder builtin -> Closure builtin -> m expr)
+  handleBoundVar :: Lv -> (Spine builtin) -> m expr
+  handlePi :: Maybe (GenericBinder (Thunk builtin) -> Closure builtin -> m expr)
+  handleLam :: Maybe (GenericBinder (Thunk builtin) -> Closure builtin -> m expr)
   handleRecord :: Maybe (Expr builtin -> RecordFields builtin -> m expr)
-  handleFreeVar :: Identifier -> Args builtin -> m expr
-  handleRecordAcc :: Type builtin -> RecordExpr builtin -> FieldName -> Args builtin -> m expr
+  handleFreeVar :: Identifier -> (Spine builtin) -> m expr
+  handleRecordAcc :: Type builtin -> RecordExpr builtin -> FieldName -> (Spine builtin) -> m expr
 
 -------------------------------------------------------------------------------
 -- Functions
 
 data FunctionExpr builtin
-  = VFunctionLam (Binder builtin) (Closure builtin)
-  | VFunctionBuiltin builtin (Args builtin)
-  | VFunctionFreeVar Identifier (Args builtin)
-  | VFunctionMeta MetaID (Args builtin)
-  | VFunctionBoundVar Lv (Args builtin)
-  | VFunctionRecordAcc (Type builtin) (RecordExpr builtin) FieldName (Args builtin)
+  = VFunctionLam (GenericBinder (Thunk builtin)) (Closure builtin)
+  | VFunctionBuiltin builtin (Spine builtin)
+  | VFunctionFreeVar Identifier (Spine builtin)
+  | VFunctionMeta MetaID (Spine builtin)
+  | VFunctionBoundVar Lv (Spine builtin)
+  | VFunctionRecordAcc (Type builtin) (RecordExpr builtin) FieldName (Spine builtin)
 
-instance TypedEvalScheme (FunctionExpr builtin) builtin m where
+instance (Monad m) => TypedEvalScheme (FunctionExpr builtin) builtin m where
   forceBuiltin b args = return $ VFunctionBuiltin b args
   forceMeta m args = return $ VFunctionMeta m args
   handleUniverse _ = Nothing
   handleRecord = Nothing
   handlePi = Nothing
-  handleLam = Just VFunctionLam
-  handleBoundVar = VFunctionBoundVar
-  handleFreeVar = VFunctionFreeVar
-  handleRecordAcc = VFunctionRecordAcc
+  handleLam = Just $ \binder closure -> return $ VFunctionLam binder closure
+  handleBoundVar lv args = return $ VFunctionBoundVar lv args
+  handleFreeVar ident args = return $ VFunctionFreeVar ident args
+  handleRecordAcc typ record field args = return $ VFunctionRecordAcc typ record field args
 
 -------------------------------------------------------------------------------
 -- Records
 
 data RecordExpr builtin
   = VRecordRecord (Type builtin) !(RecordFields builtin)
-  | VRecordFreeVar Identifier (Args builtin)
-  | VRecordMeta MetaID (Args builtin)
-  | VRecordBuiltin builtin (Args builtin)
-  | VRecordBoundVar Lv (Args builtin)
-  | VRecordRecordAcc (Type builtin) (RecordExpr builtin) FieldName (Args builtin)
+  | VRecordFreeVar Identifier (Spine builtin)
+  | VRecordMeta MetaID (Spine builtin)
+  | VRecordBuiltin builtin (Spine builtin)
+  | VRecordBoundVar Lv (Spine builtin)
+  | VRecordRecordAcc (Type builtin) (RecordExpr builtin) FieldName (Spine builtin)
 
-instance TypedEvalScheme (RecordExpr builtin) builtin m where
+instance (Monad m) => TypedEvalScheme (RecordExpr builtin) builtin m where
   forceBuiltin b args = return $ VRecordBuiltin b args
   forceMeta m args = return $ VRecordMeta m args
-  handleBoundVar = VRecordBoundVar
-  handleFreeVar = VRecordFreeVar
-  handleRecord = Just VRecordRecord
-  handleRecordAcc = VRecordRecordAcc
+  handleBoundVar lv args = return $ VRecordBoundVar lv args
+  handleFreeVar ident args = return $ VRecordFreeVar ident args
+  handleRecord = Just $ \record fields -> return $ VRecordRecord record fields
+  handleRecordAcc typ record field args = return $ VRecordRecordAcc typ record field args
   handlePi = Nothing
   handleUniverse _ = Nothing
   handleLam = Nothing

@@ -49,8 +49,8 @@ import Vehicle.Prelude.Warning (CompileWarning (..))
 
 compileQuantifier ::
   (MonadLogic m) =>
-  (Quantifier, QuantifyRatTensorArgs (Value Builtin)) ->
-  m (Value LossBuiltin)
+  (Quantifier, QuantifyRatTensorArgs (Thunk Builtin)) ->
+  m (Thunk LossBuiltin)
 compileQuantifier (q, args) = do
   maybePartitions <- compileQuantifierInternal (q, args)
   case maybePartitions of
@@ -67,7 +67,7 @@ compileQuantifier (q, args) = do
 checkFinalPartitionUnconstrained ::
   (MonadLogic m) =>
   Partition ->
-  m (Value LossBuiltin)
+  m (Thunk LossBuiltin)
 checkFinalPartitionUnconstrained = \case
   (Nothing, Nothing) -> developerError "Found unexpected trivial partition"
   (Nothing, Just value) -> return value
@@ -75,7 +75,7 @@ checkFinalPartitionUnconstrained = \case
 
 compileQuantifierInternal ::
   (MonadLogic m) =>
-  (Quantifier, QuantifyRatTensorArgs (Value Builtin)) ->
+  (Quantifier, QuantifyRatTensorArgs (Thunk Builtin)) ->
   m (MaybeTrivial Partitions)
 compileQuantifierInternal (q, args) = case q of
   Exists -> compileExists args
@@ -83,7 +83,7 @@ compileQuantifierInternal (q, args) = case q of
 
 compileForall ::
   (MonadLogic m) =>
-  QuantifyRatTensorArgs (Value Builtin) ->
+  QuantifyRatTensorArgs (Thunk Builtin) ->
   m (MaybeTrivial Partitions)
 compileForall args@(QuantifyRatTensorArgs dims _) = do
   notArgs <- negateQuantifierBody args
@@ -94,7 +94,7 @@ compileForall args@(QuantifyRatTensorArgs dims _) = do
 
 compileExists ::
   (MonadLogic m) =>
-  QuantifyRatTensorArgs (Value Builtin) ->
+  QuantifyRatTensorArgs (Thunk Builtin) ->
   m (MaybeTrivial Partitions)
 compileExists (QuantifyRatTensorArgs dims fn) =
   logCompilerSection2 MaxDetail "convert-exists" $ do
@@ -198,7 +198,7 @@ compileSearch ::
   VBinder Builtin ->
   Closure LossBuiltin ->
   Domain TensorValue ->
-  m (Value LossBuiltin)
+  m (Thunk LossBuiltin)
 compileSearch varName dims binder closure (Domain lowerBound upperBound) = do
   -- Convert the binder and the dimensions.
   lossBinder <- traverse _ binder -- convertType
@@ -288,10 +288,10 @@ findVarBound var VariableInfo {..} (NormalisedRelation rel expr)
 type MonadDomain m =
   (MonadLogic m)
 
-orLossValue :: (MonadDomain m) => Value LossBuiltin -> Value LossBuiltin -> m (Value LossBuiltin)
+orLossValue :: (MonadDomain m) => Thunk LossBuiltin -> Thunk LossBuiltin -> m (Thunk LossBuiltin)
 orLossValue e1 e2 = convertOr (TensorOp2Args (Forced $ INil (Forced INatType)) e1 e2)
 
-andLossValue :: (MonadDomain m) => Value LossBuiltin -> Value LossBuiltin -> m (Value LossBuiltin)
+andLossValue :: (MonadDomain m) => Thunk LossBuiltin -> Thunk LossBuiltin -> m (Thunk LossBuiltin)
 andLossValue e1 e2 = convertAnd (TensorOp2Args (Forced $ INil (Forced INatType)) e1 e2)
 
 notConstraint :: (MonadDomain m) => UserVariableConstraint -> m (BooleanExpr UserVariableConstraint)
@@ -307,7 +307,7 @@ notConstraint (NormalisedRelation rel expr) = do
 
 -- | Note that the constraints live in the extended tensor context, where as the remaining value lives
 -- in the original unextended context.
-type Partition = (Maybe UserVariableConstraintTree, Maybe (Value LossBuiltin))
+type Partition = (Maybe UserVariableConstraintTree, Maybe (Thunk LossBuiltin))
 
 notPartition :: (MonadDomain m) => VDims LossBuiltin -> Partition -> m Partition
 notPartition dims (constraintTree, value) = do
@@ -323,12 +323,12 @@ andPartition (c1, v1) (c2, v2) = do
 
 -- | Note that the constraints live in the extended tensor context, where as the remaining value lives
 -- in the original unextended context.
-newtype Partitions = Partitions (Map (Maybe UserVariableConstraintTree) (Maybe (Value LossBuiltin)))
+newtype Partitions = Partitions (Map (Maybe UserVariableConstraintTree) (Maybe (Thunk LossBuiltin)))
 
 singletonConstrainedPartition :: UserVariableConstraint -> Partitions
 singletonConstrainedPartition constraint = Partitions $ Map.singleton (Just (Query constraint)) Nothing
 
-singletonUnconstrainedPartition :: (MonadDomain m) => Value LossBuiltin -> m Partitions
+singletonUnconstrainedPartition :: (MonadDomain m) => Thunk LossBuiltin -> m Partitions
 singletonUnconstrainedPartition unconstrained = do
   return $ Partitions $ Map.singleton Nothing (Just unconstrained)
 
@@ -384,7 +384,7 @@ unblockingActions =
 --------------------------------------------------------------------------------
 -- Search algorithm
 
-compileBool :: (MonadDomain m) => Value Builtin -> m (MaybeTrivial Partitions)
+compileBool :: (MonadDomain m) => Thunk Builtin -> m (MaybeTrivial Partitions)
 compileBool value = logEntryAndExit value $ do
   forcedValue <- forceValue value
   case toBoolValue forcedValue of
@@ -415,7 +415,7 @@ compileBool value = logEntryAndExit value $ do
 
 compileAnd ::
   (MonadDomain m) =>
-  TensorOp2Args (Value Builtin) ->
+  TensorOp2Args (Thunk Builtin) ->
   m (MaybeTrivial Partitions)
 compileAnd (TensorOp2Args _ e1 e2) = do
   c1 <- compileBool e1
@@ -424,7 +424,7 @@ compileAnd (TensorOp2Args _ e1 e2) = do
 
 compileOr ::
   (MonadDomain m) =>
-  TensorOp2Args (Value Builtin) ->
+  TensorOp2Args (Thunk Builtin) ->
   m (MaybeTrivial Partitions)
 compileOr (TensorOp2Args _ e1 e2) = do
   c1 <- compileBool e1
@@ -437,7 +437,7 @@ compileOr (TensorOp2Args _ e1 e2) = do
 compileComparison ::
   forall m.
   (MonadDomain m) =>
-  (ComparisonOp, TensorOp2Args (Value Builtin)) ->
+  (ComparisonOp, TensorOp2Args (Thunk Builtin)) ->
   m (MaybeTrivial Partitions)
 compileComparison (op, args)
   | op == Ne = compileNonBoundComparison (op, args)
@@ -479,7 +479,7 @@ compileComparison (op, args)
 
 compileNonBoundComparison ::
   (MonadDomain m) =>
-  (ComparisonOp, TensorOp2Args (Value Builtin)) ->
+  (ComparisonOp, TensorOp2Args (Thunk Builtin)) ->
   m (MaybeTrivial Partitions)
 compileNonBoundComparison args = do
   value <- convertRatTensorPointwiseComparison args
@@ -494,7 +494,7 @@ compileNonBoundComparison args = do
 -- efficient expression to evaluate.
 unblockBoolValue ::
   (MonadDomain m) =>
-  Value Builtin ->
+  Thunk Builtin ->
   m (MaybeTrivial Partitions)
 unblockBoolValue value = do
   maybeUnblockedExpr <- maybeUnblockBoolExpr unblockingActions value
@@ -524,7 +524,7 @@ unblockBoolValue value = do
 data PurificationError
   = ContainsNetwork Identifier
   | ContainsMultipleUserVariablesFromSameSlice UserTensorVariable UserSliceVariable UserSliceVariable
-  | ImpureButProgress (Value Builtin)
+  | ImpureButProgress (Thunk Builtin)
 
 -- | Monad purify
 type MonadPurifyAssertion m =
@@ -536,8 +536,8 @@ type MonadPurifyAssertion m =
 purifyAssertion ::
   (MonadDomain m) =>
   ComparisonOp ->
-  TensorOp2Args (Value Builtin) ->
-  m (Either PurificationError (TensorOp2Args (Value Builtin)))
+  TensorOp2Args (Thunk Builtin) ->
+  m (Either PurificationError (TensorOp2Args (Thunk Builtin)))
 purifyAssertion op args = do
   callDepth <- getCallDepth
   runExceptT $ do
@@ -557,13 +557,13 @@ purifyUnblockingActions =
 
 purifyNetworkApp ::
   (MonadPurifyAssertion m) =>
-  (Value Builtin -> m (Value Builtin)) ->
+  (Thunk Builtin -> m (Thunk Builtin)) ->
   Identifier ->
-  NetworkAppArgs (Value Builtin) ->
-  m (Value Builtin)
+  NetworkAppArgs (Thunk Builtin) ->
+  m (Thunk Builtin)
 purifyNetworkApp _unblockFn ident _spine = throwError $ ContainsNetwork ident
 
-purifyBoundVar :: (MonadLogger m, MonadReadableTensorBoundContext m) => Lv -> m (Value Builtin)
+purifyBoundVar :: (MonadLogger m, MonadReadableTensorBoundContext m) => Lv -> m (Thunk Builtin)
 purifyBoundVar lv = do
   (_, maybeUserVars) <- lookupVariableInNestedCtx lv
   case maybeUserVars of
@@ -575,9 +575,9 @@ purifyBoundVar lv = do
 
 compileLinearExpr ::
   forall m.
-  (MonadLogger m, MonadFreeContext Builtin m, MonadReadableTensorBoundContext m, MonadError (Value Builtin) m) =>
+  (MonadLogger m, MonadFreeContext Builtin m, MonadReadableTensorBoundContext m, MonadError (Thunk Builtin) m) =>
   VDims LossBuiltin ->
-  Value Builtin ->
+  Thunk Builtin ->
   m (LinearExpr SliceVariable TensorValue)
 compileLinearExpr dims value = do
   forcedValue <- forceValue value
@@ -669,7 +669,7 @@ compileRatTensorVar dims lv = do
 
 logEntryAndExit ::
   (MonadDomain m) =>
-  Value Builtin ->
+  Thunk Builtin ->
   m (MaybeTrivial Partitions) ->
   m (MaybeTrivial Partitions)
 logEntryAndExit start action = do

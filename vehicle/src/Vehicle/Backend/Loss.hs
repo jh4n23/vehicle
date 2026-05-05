@@ -93,7 +93,7 @@ convertPropertyDecl ::
   Identifier ->
   DefFunctionSort ->
   VType Builtin ->
-  Value Builtin ->
+  Thunk Builtin ->
   m (Decl LossBuiltin)
 convertPropertyDecl p ident ann typ value = do
   lossType <- convertDeclType typ
@@ -105,7 +105,7 @@ convertPropertyDecl p ident ann typ value = do
 convertDeclType :: (MonadLogic m) => VType Builtin -> m (Type LossBuiltin)
 convertDeclType typ = unnormalise 0 <$> convertType typ
 
-convertMultiProperty :: (MonadLogic m) => VType Builtin -> Value Builtin -> m (Value LossBuiltin)
+convertMultiProperty :: (MonadLogic m) => VType Builtin -> Thunk Builtin -> m (Thunk LossBuiltin)
 convertMultiProperty typ value = do
   forcedType <- forceValue typ
   case toTypeValue forcedType of
@@ -113,7 +113,7 @@ convertMultiProperty typ value = do
     VVectorType tElem _d -> convertVectorProperty tElem value
     _ -> unexpectedExprError currentPass "Impossible property type"
 
-convertVectorProperty :: (MonadLogic m) => VType Builtin -> Value Builtin -> m (Value LossBuiltin)
+convertVectorProperty :: (MonadLogic m) => VType Builtin -> Thunk Builtin -> m (Thunk LossBuiltin)
 convertVectorProperty typ value = do
   dims <- getVectorDims typ
   forcedValue <- forceValue value
@@ -124,7 +124,7 @@ convertVectorProperty typ value = do
     VVectorIf args -> convertIf args
     VVectorForeach args -> convertVecForeachArgs (convertMultiProperty typ) (Forced IBoolType, dims) args
 
-convertTensorProperty :: (MonadLogic m) => Value Builtin -> m (Value LossBuiltin)
+convertTensorProperty :: (MonadLogic m) => Thunk Builtin -> m (Thunk LossBuiltin)
 convertTensorProperty value = do
   forcedValue <- forceValue value
   case toBoolTensorValue forcedValue of

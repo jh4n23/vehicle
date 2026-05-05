@@ -160,7 +160,7 @@ compileSingleProperty ::
   CompilationSettings ->
   DeclProvenance ->
   PropertyAddress ->
-  Value Builtin ->
+  Thunk Builtin ->
   m PropertyAddress
 compileSingleProperty CompilationSettings {..} prov propertyAddress expr =
   logCompilerSection2 MinDetail ("property" <+> quotePretty propertyAddress) $ do
@@ -193,7 +193,7 @@ compileSingleProperty CompilationSettings {..} prov propertyAddress expr =
 compileQueries ::
   forall m.
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m) =>
-  Value Builtin ->
+  Thunk Builtin ->
   m (Property QueryMetaData)
 compileQueries value = do
   showTopLevelEntry value
@@ -241,7 +241,7 @@ compileQueries value = do
 compileQuantifiedQuerySet ::
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m) =>
   Bool ->
-  QuantifyRatTensorArgs (Value Builtin) ->
+  QuantifyRatTensorArgs (Thunk Builtin) ->
   m (Property QueryMetaData)
 compileQuantifiedQuerySet isPropertyNegated args =
   logCompilerSection2 MaxDetail "compilation of query set" $ do
@@ -251,7 +251,7 @@ compileQuantifiedQuerySet isPropertyNegated args =
 -- | We only need this because we can't evaluate networks in the compiler.
 compileUnquantifiedQuerySet ::
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m) =>
-  Value Builtin ->
+  Thunk Builtin ->
   m (Property QueryMetaData)
 compileUnquantifiedQuerySet value = do
   let subsectionDoc = "compilation of set of unquantified queries:" <+> prettyFriendlyEmptyCtx value
@@ -293,7 +293,7 @@ handlePropertyCompileError CompilationSettings {..} declProv err = do
     UnsupportedAlternatingQuantifiers {} -> diagnoseAlternatingQuantifiers formatID originalProg declProv
     _ -> return err
 
-showTopLevelEntry :: (MonadCompile m) => Value Builtin -> m ()
+showTopLevelEntry :: (MonadCompile m) => Thunk Builtin -> m ()
 showTopLevelEntry v = do
   logDebugM MaxDetail $ do
     let vDoc = prettyFriendly (WithContext v emptyNamedCtx)

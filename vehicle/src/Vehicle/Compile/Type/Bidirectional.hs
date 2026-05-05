@@ -23,7 +23,7 @@ import Vehicle.Compile.Type.Monad
 import Vehicle.Compile.Type.Monad.Class (createFreshConstraintCtx, getRecordDefinition)
 import Vehicle.Compile.Type.System (HasTypeSystem (..), TCM)
 import Vehicle.Data.Builtin.Interface.Type (TypableBuiltin (..))
-import Vehicle.Data.Code.Value (Thunk (..), Value (..), boundContextToEnv, thunkifyExpr)
+import Vehicle.Data.Code.Value (Thunk (..), UnevaluatedThunk (..), boundContextToEnv, thunkifyExpr)
 import Vehicle.Data.Universe (UniverseLevel (..))
 import Vehicle.Data.Variable.Bound.Context.Generic
 import Vehicle.Data.Variable.Bound.Context.Name (MonadReadableNameContext (..))
@@ -317,7 +317,7 @@ inferApp ::
 inferApp fun funType args = do
   relevance <- getCurrentRelevance (Proxy @builtin)
   ctx <- getBoundCtx (Proxy @(Type builtin))
-  let normFunType = Unforced $ Thunk (boundContextToEnv ctx) funType
+  let normFunType = Unforced $ UnevaluatedThunk (boundContextToEnv ctx) funType
   let insertionProblem =
         ArgInsertionProblem
           { originalFun = fun,

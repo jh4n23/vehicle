@@ -4,7 +4,7 @@ module Vehicle.Data.Variable.Bound.Context.Tensor
   )
 where
 
-import Vehicle.Compile.TypedView
+import Vehicle.Data.Builtin.Interface (Accessor (..))
 import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Builtin.Standard.Normalise (mkDims)
 import Vehicle.Data.Code.Interface
@@ -26,19 +26,18 @@ import Vehicle.Prelude (developerError)
 replaceTensorVariableWithStackedChildren ::
   (MonadReadableTensorBoundContext m) =>
   SliceVariable ->
-  m (Value Builtin)
+  m (Thunk Builtin)
 replaceTensorVariableWithStackedChildren var = do
   nestedVar <- lookupNestedSliceVariable var
   case (childVariablesOf nestedVar, shapeOf nestedVar) of
     (Nothing, []) -> return $ Forced $ VBoundVar (toLv var) []
     (Just childVars, d : ds) ->
       return $
-        fromRatTensorValue $
-          VRatStackTensor $
-            StackTensorArgs
-              { stackType = Forced IRatType,
-                stackFirstDim = Forced $ INatLiteral d,
-                stackRemainingDims = mkDims ds,
-                stackElements = flip map childVars $ \v -> Forced $ VBoundVar (toLv v) []
-              }
+        mkExpr accessStackTensor $
+          StackTensorArgs
+            { stackType = Forced IRatType,
+              stackFirstDim = Forced $ INatLiteral d,
+              stackRemainingDims = mkDims ds,
+              stackElements = flip map childVars $ \v -> Forced $ VBoundVar (toLv v) []
+            }
     _ -> developerError "mismatched children and shape"

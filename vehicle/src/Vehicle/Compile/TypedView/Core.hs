@@ -20,27 +20,27 @@ import Vehicle.Prelude
 data TypeExpr
   = VUnitType
   | VBoolType
-  | VIndexType (Expr Builtin)
+  | VIndexType (Thunk Builtin)
   | VNatType
   | VRatType
-  | VTensorType (Expr Builtin) (Expr Builtin)
-  | VListType (Expr Builtin)
-  | VVectorType (Expr Builtin) (Expr Builtin)
-  | VPiType (Binder Builtin) (Expr Builtin)
-  | VTypeBoundVar Lv (Args Builtin)
-  | VTypeFreeVar Identifier (Args Builtin)
+  | VTensorType (Thunk Builtin) (Thunk Builtin)
+  | VListType (Thunk Builtin)
+  | VVectorType (Thunk Builtin) (Thunk Builtin)
+  | VPiType (VBinder Builtin) (Closure Builtin)
+  | VTypeBoundVar Lv (Spine Builtin)
+  | VTypeFreeVar Identifier (Spine Builtin)
 
-instance TypedEvalScheme TypeExpr Builtin where
-  handleUniverse = Nothing
+instance (MonadNorm Builtin m) => TypedEvalScheme TypeExpr Builtin m where
+  handleUniverse _ = Nothing
   handleLam = Nothing
   handleRecord = Nothing
-  handlePi = Just VPiType
-  handleBoundVar = VTypeBoundVar
-  handleFreeVar = VTypeFreeVar
-  handleMeta = caseTypeError "MetaVar" "BoolExpr"
+  handlePi = Just $ \binder closure -> return $ VPiType binder closure
+  handleBoundVar lv args = return $ VTypeBoundVar lv args
+  handleFreeVar ident args = return $ VTypeFreeVar ident args
   handleRecordAcc = caseTypeError "RecordAcc" "BoolExpr"
 
-  handleBuiltin b spine = case (b, spine) of
+  forceMeta = caseTypeError "MetaVar" "BoolExpr"
+  forceBuiltin b spine = return $ case (b, spine) of
     (BuiltinType UnitType, []) -> VUnitType
     (BuiltinType BoolType, []) -> VBoolType
     (BuiltinType RatType, []) -> VRatType
@@ -51,46 +51,40 @@ instance TypedEvalScheme TypeExpr Builtin where
     (BuiltinType VectorType, [tElem, dim]) -> VVectorType (argExpr tElem) (argExpr dim)
     _ -> developerError $ "ill-typed type" <+> pretty b
 
-forceTypeExpr :: (MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m TypeExpr
-forceTypeExpr env expr = forceThunk (Thunk env expr)
+forceTypeExpr :: (MonadNorm Builtin m) => Thunk Builtin -> m TypeExpr
+forceTypeExpr = forceThunk
 
 -------------------------------------------------------------------------------
 -- Booleans
 
--- | A view on all possible expressions that can have type `Tensor Bool ds`
--- and that we know how to compile to constraints.
-data CompilableBoolTensorExpr
-  = VBoolTensorLiteral (Tensor Bool)
-  | VBoolStackTensor (StackTensorArgs (Expr Builtin))
-  | VBoolConstTensor (ConstTensorArgs (Expr Builtin))
-  | VBoolTensorAnd (TensorOp2Args (Expr Builtin))
-  | VBoolTensorOr (TensorOp2Args (Expr Builtin))
-  | VBoolTensorCompareRatReduced (ComparisonOp, TensorOp2Args (Expr Builtin))
-  | VBoolTensorQuantifyRat (Quantifier, QuantifyRatTensorArgs (Expr Builtin))
-  | VBoolTensorNot (TensorOp1Args (Expr Builtin))
-
 -- | A view on all possible expressions that can have type `Tensor Bool ds`.
 data BoolTensorExpr
-  = VCompilableBoolTensorExpr CompilableBoolTensorExpr
-  | VBoolTensorReduceAnd (TensorReductionArgs (Expr Builtin))
-  | VBoolTensorReduceOr (TensorReductionArgs (Expr Builtin))
-  | VBoolTensorCompareIndex (ComparisonOp, IndexComparisonArgs (Expr Builtin))
-  | VBoolTensorCompareNat (ComparisonOp, Op2Args (Expr Builtin))
-  | VBoolTensorAt (AtTensorArgs (Expr Builtin))
-  | VBoolTensorForeach (ForeachTensorArgs (Expr Builtin))
-  | VBoolTensorCompareRatPointwise (ComparisonOp, TensorOp2Args (Expr Builtin))
-  | VBoolTensorIf (IfArgs (Expr Builtin))
+  = VBoolTensorLiteral (Tensor Bool)
+  | VBoolStackTensor (StackTensorArgs (Thunk Builtin))
+  | VBoolConstTensor (ConstTensorArgs (Thunk Builtin))
+  | VBoolTensorAnd (TensorOp2Args (Thunk Builtin))
+  | VBoolTensorOr (TensorOp2Args (Thunk Builtin))
+  | VBoolTensorCompareRat (ComparisonOp, TensorComparisonArgs (Thunk Builtin))
+  | VBoolTensorQuantifyRat (Quantifier, QuantifyRatTensorArgs (Thunk Builtin))
+  | VBoolTensorNot (TensorOp1Args (Thunk Builtin))
+  | VBoolTensorReduceAnd (TensorReductionArgs (Thunk Builtin))
+  | VBoolTensorReduceOr (TensorReductionArgs (Thunk Builtin))
+  | VBoolTensorCompareIndex (ComparisonOp, IndexComparisonArgs (Thunk Builtin))
+  | VBoolTensorCompareNat (ComparisonOp, Op2Args (Thunk Builtin))
+  | VBoolTensorAt (AtTensorArgs (Thunk Builtin))
+  | VBoolTensorForeach (ForeachTensorArgs (Thunk Builtin))
+  | VBoolTensorIf (IfArgs (Thunk Builtin))
 
-instance TypedEvalScheme BoolTensorExpr Builtin where
-  handleBuiltin b spine = case normAppList (Builtin mempty b) spine of
-    (getExpr accessBoolTensorLiteral -> Just t) -> VCompilableBoolTensorExpr $ VBoolTensorLiteral t
-    (getExpr accessConstTensor -> Just args) -> VCompilableBoolTensorExpr $ VBoolConstTensor args
-    (getExpr accessStackTensor -> Just args) -> VCompilableBoolTensorExpr $ VBoolStackTensor args
-    (getExpr accessAndTensor -> Just args) -> VCompilableBoolTensorExpr $ VBoolTensorAnd args
-    (getExpr accessOrTensor -> Just args) -> VCompilableBoolTensorExpr $ VBoolTensorOr args
-    (getExpr accessNotTensor -> Just args) -> VCompilableBoolTensorExpr $ VBoolTensorNot args
-    (getExpr accessQuantifyRatTensor -> Just args) -> VCompilableBoolTensorExpr $ VBoolTensorQuantifyRat args
-    (getExpr accessCompareRatTensor -> Just args) -> VCompilableBoolTensorExpr $ VBoolTensorCompareRatReduced _
+instance (MonadNorm Builtin m) => TypedEvalScheme BoolTensorExpr Builtin m where
+  forceBuiltin b spine = return $ case VBuiltin b spine of
+    (getExpr accessBoolTensorLiteral -> Just t) -> VBoolTensorLiteral t
+    (getExpr accessConstTensor -> Just args) -> VBoolConstTensor args
+    (getExpr accessStackTensor -> Just args) -> VBoolStackTensor args
+    (getExpr accessAndTensor -> Just args) -> VBoolTensorAnd args
+    (getExpr accessOrTensor -> Just args) -> VBoolTensorOr args
+    (getExpr accessNotTensor -> Just args) -> VBoolTensorNot args
+    (getExpr accessQuantifyRatTensor -> Just args) -> VBoolTensorQuantifyRat args
+    (getExpr accessCompareRatTensor -> Just args) -> VBoolTensorCompareRat args
     (getExpr accessCompareNat -> Just args) -> VBoolTensorCompareNat args
     (getExpr accessCompareIndex -> Just args) -> VBoolTensorCompareIndex args
     (getExpr accessReduceAnd -> Just args) -> VBoolTensorReduceAnd args
@@ -99,171 +93,158 @@ instance TypedEvalScheme BoolTensorExpr Builtin where
     (getExpr accessForeachTensor -> Just args) -> VBoolTensorForeach args
     (getExpr accessIf -> Just args) -> VBoolTensorIf args
     _ -> developerError $ "ill-typed BoolTensor expression:" <+> pretty b <+> prettyVerbose spine
+  forceMeta = caseTypeError "MetaVar" "BoolExpr"
 
-  handleUniverse = Nothing
+  handleUniverse _ = Nothing
   handleLam = Nothing
   handleRecord = Nothing
   handlePi = Nothing
   handleBoundVar = caseTypeError "BoundVar" "BoolExpr"
   handleFreeVar = caseTypeError "FreeVar" "BoolExpr"
-  handleMeta = caseTypeError "MetaVar" "BoolExpr"
   handleRecordAcc = caseTypeError "RecordAcc" "BoolExpr"
 
-forceBoolTensorExpr :: (MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m BoolTensorExpr
-forceBoolTensorExpr env expr = forceThunk (Thunk env expr)
+forceBoolTensorExpr :: (MonadNorm Builtin m) => Thunk Builtin -> m BoolTensorExpr
+forceBoolTensorExpr = forceThunk
 
 -------------------------------------------------------------------------------
 -- Naturals
 
-newtype CompilableNatExpr
-  = VNatLiteral Int
-
 -- | A view on all possible expressions that can have type `Nat`.
 data NatExpr
-  = VCompilableNat CompilableNatExpr
-  | VNatBoundVar Lv (Args Builtin)
-  | VNatIf (IfArgs (Expr Builtin))
-  | VNatAdd (Op2Args (Expr Builtin))
-  | VNatMul (Op2Args (Expr Builtin))
+  = VNatLiteral Int
+  | VNatBoundVar Lv (Spine Builtin)
+  | VNatIf (IfArgs (Thunk Builtin))
+  | VNatAdd (Op2Args (Thunk Builtin))
+  | VNatMul (Op2Args (Thunk Builtin))
   | VNatParameter Identifier
 
-instance TypedEvalScheme NatExpr Builtin where
-  handleBuiltin b spine = case normAppList (Builtin mempty b) spine of
-    (getExpr accessNatLiteral -> Just i) -> VCompilableNat $ VNatLiteral i
+instance (MonadNorm Builtin m) => TypedEvalScheme NatExpr Builtin m where
+  forceBuiltin b spine = return $ case VBuiltin b spine of
+    (getExpr accessNatLiteral -> Just i) -> VNatLiteral i
     (getExpr accessIf -> Just args) -> VNatIf args
     (getExpr accessAddNat -> Just args) -> VNatAdd args
     (getExpr accessMulNat -> Just args) -> VNatMul args
     _ -> developerError $ "ill-typed BoolTensor expression:" <+> pretty b <+> prettyVerbose spine
+  forceMeta = caseTypeError "MetaVar" "NatExpr"
 
-  handleUniverse = Nothing
+  handleUniverse _ = Nothing
   handleLam = Nothing
   handleRecord = Nothing
   handlePi = Nothing
-  handleBoundVar = VNatBoundVar
-  handleFreeVar ident spine = case spine of
+  handleBoundVar lv args = return $ VNatBoundVar lv args
+  handleFreeVar ident spine = return $ case spine of
     [] -> VNatParameter ident
     _ -> caseTypeError "FreeVar" "NatExpr"
-  handleMeta = caseTypeError "MetaVar" "NatExpr"
   handleRecordAcc = caseTypeError "RecordAcc" "NatExpr"
 
-forceNatExpr :: (MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m NatExpr
-forceNatExpr env expr = forceThunk (Thunk env expr)
+forceNatExpr :: (MonadNorm Builtin m) => Thunk Builtin -> m NatExpr
+forceNatExpr = forceThunk
 
 -------------------------------------------------------------------------------
 -- Index
 
 -- | A view on all possible expressions that can have type `Index n`.
-newtype CompilableIndexValue
-  = VIndexLiteral Int
-
 data IndexExpr
-  = VCompilableIndexValue CompilableIndexValue
-  | VIndexBoundVar Lv (Args Builtin)
-  | VIndexIf (IfArgs (Expr Builtin))
-  | VIndexRecordAcc (Type Builtin) (RecordExpr Builtin) FieldName (Args Builtin)
+  = VIndexLiteral Int
+  | VIndexBoundVar Lv (Spine Builtin)
+  | VIndexIf (IfArgs (Thunk Builtin))
+  | VIndexRecordAcc (Type Builtin) (RecordExpr Builtin) FieldName (Spine Builtin)
 
-instance TypedEvalScheme IndexExpr Builtin where
-  handleBuiltin b spine = case normAppList (Builtin mempty b) spine of
-    (getExpr accessIndexLiteral -> Just (i, _)) -> VCompilableIndexValue $ VIndexLiteral i
+instance (MonadNorm Builtin m) => TypedEvalScheme IndexExpr Builtin m where
+  forceBuiltin b spine = return $ case VBuiltin b spine of
+    (getExpr accessIndexLiteral -> Just (i, _)) -> VIndexLiteral i
     (getExpr accessIf -> Just args) -> VIndexIf args
     _ -> developerError $ "ill-typed BoolTensor expression:" <+> pretty b <+> prettyVerbose spine
+  forceMeta = caseTypeError "MetaVar" "IndexExpr"
 
-  handleUniverse = Nothing
+  handleUniverse _ = Nothing
   handleLam = Nothing
   handleRecord = Nothing
   handlePi = Nothing
-  handleBoundVar = VIndexBoundVar
+  handleBoundVar lv spine = return $ VIndexBoundVar lv spine
   handleFreeVar = caseTypeError "FreeVar" "IndexExpr"
-  handleMeta = caseTypeError "MetaVar" "IndexExpr"
-  handleRecordAcc = VIndexRecordAcc
+  handleRecordAcc typ record field spine = return $ VIndexRecordAcc typ record field spine
 
-forceIndexExpr :: (MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m IndexExpr
-forceIndexExpr env expr = forceThunk (Thunk env expr)
+forceIndexExpr :: (MonadNorm Builtin m) => Thunk Builtin -> m IndexExpr
+forceIndexExpr = forceThunk
 
 -------------------------------------------------------------------------------
 -- Dimensions
 
 -- | A view on all possible expressions that can have type `List Int`.
-data CompilableDimensionsExpr
-  = VDimsNil
-  | VDimsCons (Expr Builtin) (Expr Builtin)
-
 data DimensionsExpr
-  = VCompilableDimensionsExpr CompilableDimensionsExpr
-  | VDimsIf (IfArgs (Expr Builtin))
-  | VDimsBoundVar Lv (Args Builtin)
-  | VDimsRecordAcc (Type Builtin) (RecordExpr Builtin) FieldName (Args Builtin)
+  = VDimsNil
+  | VDimsCons (Thunk Builtin) (Thunk Builtin)
+  | VDimsIf (IfArgs (Thunk Builtin))
+  | VDimsBoundVar Lv (Spine Builtin)
+  | VDimsRecordAcc (Type Builtin) (RecordExpr Builtin) FieldName (Spine Builtin)
 
-instance TypedEvalScheme DimensionsExpr Builtin where
-  handleUniverse = Nothing
+instance (MonadNorm Builtin m) => TypedEvalScheme DimensionsExpr Builtin m where
+  handleUniverse _ = Nothing
   handlePi = Nothing
   handleLam = Nothing
   handleRecord = Nothing
   handleBoundVar = caseTypeError "BoundVar" "RatTensorExpr"
   handleFreeVar = caseTypeError "FreeVar" "RatTensorExpr"
-  handleMeta = caseTypeError "Meta" "RatTensorExpr"
-  handleRecordAcc = VDimsRecordAcc
+  handleRecordAcc typ record field spine = return $ VDimsRecordAcc typ record field spine
 
-  handleBuiltin b spine = case normAppList (Builtin mempty b) spine of
-    (getExpr accessNil -> Just (NilArgs {})) -> VCompilableDimensionsExpr VDimsNil
-    (getExpr accessCons -> Just (ConsArgs _ x xs)) -> VCompilableDimensionsExpr $ VDimsCons x xs
+  forceBuiltin b spine = return $ case VBuiltin b spine of
+    (getExpr accessNil -> Just (NilArgs {})) -> VDimsNil
+    (getExpr accessCons -> Just (ConsArgs _ x xs)) -> VDimsCons x xs
     (getExpr accessIf -> Just args) -> VDimsIf args
     _ -> developerError $ "ill-typed RatTensor builtin:" <+> pretty b
+  forceMeta = caseTypeError "Meta" "RatTensorExpr"
 
-forceDimensionsExpr :: (MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m DimensionsExpr
-forceDimensionsExpr env expr = forceThunk (Thunk env expr)
+forceDimensionsExpr :: (MonadNorm Builtin m) => Thunk Builtin -> m DimensionsExpr
+forceDimensionsExpr = forceThunk
 
 -------------------------------------------------------------------------------
 -- Rational Tensors
 
--- | A view on all possible compilable expressions that can have type `Tensor Rat`.
-data CompilableRatTensorValue
-  = VRatTensorLiteral (Tensor Rational)
-  | VRatConstTensor (ConstTensorArgs (Expr Builtin))
-  | VRatStackTensor (StackTensorArgs (Expr Builtin))
-
 -- | A view on all possible expressions that can have type `Tensor Rat`.
 data RatTensorExpr
-  = VCompilableRatTensorValue CompilableRatTensorValue
-  | VReduceAddRatTensor (TensorReductionArgs (Expr Builtin))
-  | VReduceMulRatTensor (TensorReductionArgs (Expr Builtin))
-  | VReduceMinRatTensor (TensorReductionArgs (Expr Builtin))
-  | VReduceMaxRatTensor (TensorReductionArgs (Expr Builtin))
-  | VNegRatTensor (TensorOp1Args (Expr Builtin))
-  | VAddRatTensor (TensorOp2Args (Expr Builtin))
-  | VSubRatTensor (TensorOp2Args (Expr Builtin))
-  | VMulRatTensor (TensorOp2Args (Expr Builtin))
-  | VDivRatTensor (TensorOp2Args (Expr Builtin))
-  | VMinRatTensor (TensorOp2Args (Expr Builtin))
-  | VMaxRatTensor (TensorOp2Args (Expr Builtin))
-  | VRatAt (AtTensorArgs (Expr Builtin))
-  | VRatForeach (ForeachTensorArgs (Expr Builtin))
-  | VIfRatTensor (IfArgs (Expr Builtin))
-  | VNetworkApplication Identifier (NetworkAppArgs (Expr Builtin))
+  = VRatTensorLiteral (Tensor Rational)
+  | VRatConstTensor (ConstTensorArgs (Thunk Builtin))
+  | VRatStackTensor (StackTensorArgs (Thunk Builtin))
+  | VReduceAddRatTensor (TensorReductionArgs (Thunk Builtin))
+  | VReduceMulRatTensor (TensorReductionArgs (Thunk Builtin))
+  | VReduceMinRatTensor (TensorReductionArgs (Thunk Builtin))
+  | VReduceMaxRatTensor (TensorReductionArgs (Thunk Builtin))
+  | VNegRatTensor (TensorOp1Args (Thunk Builtin))
+  | VAddRatTensor (TensorOp2Args (Thunk Builtin))
+  | VSubRatTensor (TensorOp2Args (Thunk Builtin))
+  | VMulRatTensor (TensorOp2Args (Thunk Builtin))
+  | VDivRatTensor (TensorOp2Args (Thunk Builtin))
+  | VMinRatTensor (TensorOp2Args (Thunk Builtin))
+  | VMaxRatTensor (TensorOp2Args (Thunk Builtin))
+  | VRatAt (AtTensorArgs (Thunk Builtin))
+  | VRatForeach (ForeachTensorArgs (Thunk Builtin))
+  | VIfRatTensor (IfArgs (Thunk Builtin))
+  | VNetworkApplication Identifier (NetworkAppArgs (Thunk Builtin))
   | VParameterOrDataset Identifier
   | VRatTensorBoundVar Lv
-  | VRatTensorRecordAcc (Type Builtin) (RecordExpr Builtin) FieldName (Args Builtin)
+  | VRatTensorRecordAcc (Type Builtin) (RecordExpr Builtin) FieldName (Spine Builtin)
 
-instance TypedEvalScheme RatTensorExpr Builtin where
-  handleUniverse = Nothing
+instance (MonadNorm Builtin m) => TypedEvalScheme RatTensorExpr Builtin m where
+  handleUniverse _ = Nothing
   handlePi = Nothing
   handleLam = Nothing
   handleRecord = Nothing
-  handleBoundVar lv spine = case spine of
+  handleBoundVar lv spine = return $ case spine of
     [] -> VRatTensorBoundVar lv
     _ -> caseTypeError "BoundVar" "RatTensorExpr"
-  handleFreeVar ident spine = case spine of
+  handleFreeVar ident spine = return $ case spine of
     (getExpr accessSpine -> Just args) -> VNetworkApplication ident args
     [] -> VParameterOrDataset ident
     _ -> caseTypeError "FreeVar" "RatTensorExpr"
-  handleMeta = caseTypeError "Meta" "RatTensorExpr"
-  handleRecordAcc = VRatTensorRecordAcc
+  handleRecordAcc typ record field spine = return $ VRatTensorRecordAcc typ record field spine
 
-  handleBuiltin b spine = case normAppList (Builtin mempty b) spine of
+  forceMeta = caseTypeError "Meta" "RatTensorExpr"
+  forceBuiltin b spine = return $ case VBuiltin b spine of
     -- Compilable builtins
-    (getExpr accessRatTensorLiteral -> Just t) -> VCompilableRatTensorValue $ VRatTensorLiteral t
-    (getExpr accessConstTensor -> Just args) -> VCompilableRatTensorValue $ VRatConstTensor args
-    (getExpr accessStackTensor -> Just args) -> VCompilableRatTensorValue $ VRatStackTensor args
+    (getExpr accessRatTensorLiteral -> Just t) -> VRatTensorLiteral t
+    (getExpr accessConstTensor -> Just args) -> VRatConstTensor args
+    (getExpr accessStackTensor -> Just args) -> VRatStackTensor args
     -- Non-compilable builtins
     (getExpr accessReduceAddRat -> Just args) -> VReduceAddRatTensor args
     (getExpr accessReduceMulRat -> Just args) -> VReduceMulRatTensor args
@@ -281,8 +262,8 @@ instance TypedEvalScheme RatTensorExpr Builtin where
     (getExpr accessForeachTensor -> Just args) -> VRatForeach args
     _ -> developerError $ "ill-typed RatTensor builtin:" <+> pretty b
 
-forceRatTensorExpr :: (MonadNorm Builtin m) => BoundEnv Builtin -> Expr Builtin -> m RatTensorExpr
-forceRatTensorExpr env expr = forceThunk (Thunk env expr)
+forceRatTensorExpr :: (MonadNorm Builtin m) => Thunk Builtin -> m RatTensorExpr
+forceRatTensorExpr = forceThunk
 
 caseTypeError :: Doc a -> Doc a -> v
 caseTypeError op exprType = developerError $ "not expecting" <+> squotes op <+> "in expression of type" <+> exprType

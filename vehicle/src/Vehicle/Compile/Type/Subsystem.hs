@@ -18,7 +18,7 @@ import Vehicle.Compile.Dependency (pruneUnusedDeclarations)
 import Vehicle.Compile.Error
 import Vehicle.Compile.Monomorphisation (monomorphise)
 import Vehicle.Compile.Normalise.Core
-import Vehicle.Compile.Normalise.NBE (evalBuiltinDetailed, findInstanceArg)
+import Vehicle.Compile.Normalise.NBE (findInstanceArg)
 import Vehicle.Compile.Normalise.Quote (unnormalise)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyExternal)
@@ -193,7 +193,7 @@ resolveInstanceArgumentsAndCasts prog =
           result <-
             runFreeContextT invalidFreeCtx $
               runNameBoundContextT invalidNameCtx $
-                evalBuiltinDetailed b (fmap (thunkifyArg emptyBoundEnv) args)
+                evalBuiltin b (fmap (thunkifyArg emptyBoundEnv) args)
 
           case result of
             EvaluationResult value -> return $ unnormalise 0 value

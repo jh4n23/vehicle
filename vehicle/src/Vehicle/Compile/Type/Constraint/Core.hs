@@ -20,7 +20,7 @@ import Vehicle.Compile.Type.Meta.Variable
 import Vehicle.Compile.Type.Monad
 import Vehicle.Compile.Type.Monad.Class
 import Vehicle.Data.Builtin.Interface.Print
-import Vehicle.Data.Code.Value (Value, boundContextToEnv, thunkifyExpr)
+import Vehicle.Data.Code.Value (Thunk, boundContextToEnv, thunkifyExpr)
 import Vehicle.Data.DSL
 import Vehicle.Data.Variable.Bound.Context.Generic
 
@@ -35,8 +35,8 @@ malformedConstraintError c =
 createInstanceUnification ::
   (MonadTypeChecker builtin m) =>
   (ConstraintContext builtin, InstanceConstraintOrigin builtin) ->
-  Value builtin ->
-  Value builtin ->
+  Thunk builtin ->
+  Thunk builtin ->
   m (WithContext (UnificationConstraint builtin))
 createInstanceUnification (ctx, origin) e1 e2 = do
   let unifyOrigin = CheckingInstanceType origin

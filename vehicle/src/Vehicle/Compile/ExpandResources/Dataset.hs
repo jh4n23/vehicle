@@ -20,7 +20,7 @@ parseDataset ::
   DeclProvenance ->
   Type Builtin ->
   FilePath ->
-  m (Value Builtin)
+  m (Thunk Builtin)
 parseDataset decl@(ident, _) expectedType filePath = do
   logDebug MinDetail $ "Reading" <+> squotes (pretty ident)
   value <- case takeExtension filePath of

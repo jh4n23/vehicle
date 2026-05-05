@@ -8,15 +8,15 @@ module Vehicle.Data.Code.Value
     extendEnvWithBound,
     boundEnvToCtx,
     emptyBoundEnv,
-    Thunk (..),
+    UnevaluatedThunk (..),
     thunkifyExpr,
     thunkifyArg,
     thunkifyBinder,
     thunkifyArgs,
     Closure (..),
     extendClosure,
+    Thunk (..),
     Value (..),
-    ForcedValue (..),
     VType,
     VArg,
     VBinder,
@@ -105,17 +105,17 @@ boundEnvToCtx (BoundEnv env) = toNamedBoundCtx (fmap fst env)
 
 -- | Unevaluated expressions paired with the environment that it should
 -- be evaluated in.
-data Thunk builtin = Thunk (BoundEnv builtin) (Expr builtin)
+data UnevaluatedThunk builtin = UnevaluatedThunk (BoundEnv builtin) (Expr builtin)
   deriving (Show, Generic, Eq, Ord)
 
-instance HasProvenance (Thunk builtin) where
-  provenanceOf (Thunk _env expr) = provenanceOf expr
+instance HasProvenance (UnevaluatedThunk builtin) where
+  provenanceOf (UnevaluatedThunk _env expr) = provenanceOf expr
 
-thunkifyExpr :: BoundEnv builtin -> Expr builtin -> Value builtin
-thunkifyExpr env = Unforced . Thunk env
+thunkifyExpr :: BoundEnv builtin -> Expr builtin -> Thunk builtin
+thunkifyExpr env = Unforced . UnevaluatedThunk env
 
 thunkifyBinder :: BoundEnv builtin -> Binder builtin -> VBinder builtin
-thunkifyBinder env = fmap (Thunk env)
+thunkifyBinder env = fmap (\e -> Unforced $ UnevaluatedThunk env e)
 
 thunkifyArg :: BoundEnv builtin -> Arg builtin -> VArg builtin
 thunkifyArg env = fmap (thunkifyExpr env)
@@ -126,27 +126,27 @@ thunkifyArgs env = fmap (thunkifyArg env) . NonEmpty.toList
 -----------------------------------------------------------------------------
 -- Closures
 
--- | A special type of `Thunk` that is used for binders. The environment
+-- | A special type of `UnevaluatedThunk` that is used for binders. The environment
 -- needs to be first extended with a value for the bound variable before
 -- it can be normalised.
 data Closure builtin = Closure (BoundEnv builtin) (Expr builtin)
   deriving (Show, Generic, Eq, Ord)
 
-extendClosure :: Closure builtin -> Binder builtin -> Thunk builtin -> Thunk builtin
+extendClosure :: Closure builtin -> GenericBinder expr -> Thunk builtin -> UnevaluatedThunk builtin
 extendClosure (Closure env expr) binder value =
-  Thunk (extendEnvWithDefined value binder env) expr
+  UnevaluatedThunk (extendEnvWithDefined value binder env) expr
 
 -----------------------------------------------------------------------------
 -- Normalised expressions
 
-data Value builtin
-  = Forced (ForcedValue builtin)
-  | Unforced (Thunk builtin)
+data Thunk builtin
+  = Forced (Value builtin)
+  | Unforced (UnevaluatedThunk builtin)
   deriving (Show, Generic, Eq, Ord)
 
 -- | A normalised expression. Internal invariant is that it should always be
 -- well-typed.
-data ForcedValue builtin
+data Value builtin
   = VUniverse !UniverseLevel
   | VMeta !MetaID !(Spine builtin)
   | VFreeVar !Identifier !(Spine builtin)
@@ -155,20 +155,20 @@ data ForcedValue builtin
   | VLam !(VBinder builtin) !(Closure builtin)
   | VPi !(VBinder builtin) !(Closure builtin)
   | VRecord (VType builtin) !(VRecordFields builtin)
-  | VRecordAcc !(VType builtin) !(Value builtin) !FieldName !(Spine builtin)
+  | VRecordAcc !(VType builtin) !(Thunk builtin) !FieldName !(Spine builtin)
   deriving (Show, Generic, Eq, Ord)
 
-type VType builtin = Value builtin
+type VType builtin = Thunk builtin
 
-type VArg builtin = GenericArg (Value builtin)
+type VArg builtin = GenericArg (Thunk builtin)
 
 type VBinder builtin = GenericBinder (Thunk builtin)
 
-type VTelescope builtin = GenericTelescope (Value builtin)
+type VTelescope builtin = GenericTelescope (Thunk builtin)
 
-type VRecordFields builtin = SearchableRecordFields (Value builtin)
+type VRecordFields builtin = SearchableRecordFields (Thunk builtin)
 
-type VDims builtin = Value builtin
+type VDims builtin = Thunk builtin
 
 -- | A list of arguments for an application that cannot be normalised.
 type Spine builtin = [VArg builtin]
@@ -179,7 +179,7 @@ type Spine builtin = [VArg builtin]
 -- | A pair of an unnormalised and normalised expression.
 data GluedExpr builtin = Glued
   { unnormalised :: Expr builtin,
-    normalised :: Value builtin
+    normalised :: Thunk builtin
   }
   deriving (Show, Generic)
 
@@ -196,14 +196,14 @@ type GluedType builtin = GluedExpr builtin
 -- to wrap them in this ugly type-class that stores the dimensions internally.
 data DimensionedTensorValue builtin = TensorValue
   { tensorValueDims :: VDims builtin,
-    tensorValue :: Value builtin
+    tensorValue :: Thunk builtin
   }
   deriving (Show, Eq, Ord)
 
 -----------------------------------------------------------------------------
 -- Instances
 
-instance (HasBuiltinConstructor ForcedValue Value) where
+instance (HasBuiltinConstructor Value Thunk) where
   accessBuiltinC =
     Access
       { getExpr = \case

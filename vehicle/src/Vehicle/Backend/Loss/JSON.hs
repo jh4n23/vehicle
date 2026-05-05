@@ -14,7 +14,8 @@ import GHC.Generics (Generic)
 import Prettyprinter (Pretty (..), (<+>))
 import Vehicle.Compile.Arity
 import Vehicle.Compile.Error
-import Vehicle.Compile.Normalise.NBE (MonadNorm, forceValue)
+import Vehicle.Compile.Normalise.NBE (MonadNorm)
+import Vehicle.Compile.Normalise.Value (forceValue)
 import Vehicle.Compile.Prelude (Ix (..))
 import Vehicle.Compile.Prelude qualified as S (Binder, Decl, Expr (..), GenericDecl (..), GenericProg (..), Prog)
 import Vehicle.Compile.Prelude.Utils (getNamedBinderInfo)
@@ -174,7 +175,7 @@ convertType env body = convertTypeValue $ thunkifyExpr env body
 convertTypeValue :: (MonadJSON m) => VType LossBuiltin -> m JType
 convertTypeValue value = do
   showEntry value
-  forcedValue <- forceValue value
+  (forcedValue, _) <- forceValue value
   result <- case forcedValue of
     VMeta {} -> resolutionError currentPass "VMeta"
     VFreeVar {} -> resolutionError currentPass "VFreeVar"
@@ -219,10 +220,10 @@ convertExpr env body = do
   debugFriendly body
   convertValue (thunkifyExpr env body)
 
-convertValue :: (MonadJSON m) => Value LossBuiltin -> m JExpr
+convertValue :: (MonadJSON m) => Thunk LossBuiltin -> m JExpr
 convertValue value = do
   showEntry value
-  forcedValue <- forceValue value
+  (forcedValue, _) <- forceValue value
   result <- case forcedValue of
     VMeta {} -> resolutionError currentPass "VMeta"
     VFreeVar {} -> resolutionError currentPass "VFreeVar"
@@ -300,7 +301,7 @@ convertNullaryOp b fn = \case
 
 convertTensorOp1 ::
   (MonadJSON m) =>
-  (Value LossBuiltin -> m a) ->
+  (Thunk LossBuiltin -> m a) ->
   LossBuiltin ->
   (a -> a) ->
   Spine LossBuiltin ->
@@ -311,7 +312,7 @@ convertTensorOp1 convert b fn spine = case getExpr accessSpine spine of
 
 convertTensorOp2 ::
   (MonadJSON m) =>
-  (Value LossBuiltin -> m a) ->
+  (Thunk LossBuiltin -> m a) ->
   LossBuiltin ->
   (a -> a -> a) ->
   Spine LossBuiltin ->
@@ -322,7 +323,7 @@ convertTensorOp2 convert b fn spine = case getExpr accessSpine spine of
 
 convertTensorReduction ::
   (MonadJSON m) =>
-  (Value LossBuiltin -> m a) ->
+  (Thunk LossBuiltin -> m a) ->
   LossBuiltin ->
   (a -> a -> a) ->
   Spine LossBuiltin ->
@@ -333,7 +334,7 @@ convertTensorReduction convert b fn spine = case getExpr accessSpine spine of
 
 convertAtTensor ::
   (MonadJSON m) =>
-  (Value LossBuiltin -> m JExpr) ->
+  (Thunk LossBuiltin -> m JExpr) ->
   Spine LossBuiltin ->
   m JExpr
 convertAtTensor convert spine = case getExpr accessSpine spine of
@@ -376,7 +377,7 @@ arityError fun arity explicitArgs =
             <+> prettyVerbose explicitArgs
         )
 
-showEntry :: (MonadJSON m) => Value LossBuiltin -> m ()
+showEntry :: (MonadJSON m) => Thunk LossBuiltin -> m ()
 showEntry e = do
   logDebug MaxDetail $ "json-enter:" <+> prettyVerbose e
   incrCallDepth

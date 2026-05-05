@@ -42,7 +42,7 @@ import Prelude hiding (Applicative (..))
 
 eliminateExists ::
   (MonadQueryStructure m) =>
-  QuantifyRatTensorArgs (Value Builtin) ->
+  QuantifyRatTensorArgs (Thunk Builtin) ->
   m (MaybeTrivial Partitions)
 eliminateExists (QuantifyRatTensorArgs _ fn) = do
   let (binder, closure) = accessQuantifierLambda fn
@@ -83,7 +83,7 @@ eliminateExists (QuantifyRatTensorArgs _ fn) = do
 
 eliminateExistless ::
   (MonadQueryStructure m) =>
-  Value Builtin ->
+  Thunk Builtin ->
   m (MaybeTrivial Partitions)
 eliminateExistless value = do
   (maybePartitions, equalities) <- runWriterT $ compileBoolExpr value
@@ -94,8 +94,8 @@ eliminateExistless value = do
 -- of assertions implicitly existentially quantified by a set of network
 -- input/output variables.
 compileBoolExpr ::
-  (MonadQueryStructure m, MonadWriter [Value Builtin] m) =>
-  Value Builtin ->
+  (MonadQueryStructure m, MonadWriter [Thunk Builtin] m) =>
+  Thunk Builtin ->
   m (MaybeTrivial Partitions)
 compileBoolExpr value = do
   showEntry value
@@ -128,7 +128,7 @@ compileBoolExpr value = do
 purifyAndCompileAssertion ::
   (MonadQuantifierBody m) =>
   ComparisonOp ->
-  TensorOp2Args (Value Builtin) ->
+  TensorOp2Args (Thunk Builtin) ->
   m (MaybeTrivial Partitions)
 purifyAndCompileAssertion op args
   | op == Ne =
@@ -148,8 +148,8 @@ purifyAndCompileAssertion op args
 compilePurifiedAssertion ::
   (MonadQuantifierBody m) =>
   ComparisonOp ->
-  TensorOp2Args (Value Builtin) ->
-  m (Either (Value Builtin) LinearAssertion)
+  TensorOp2Args (Thunk Builtin) ->
+  m (Either (Thunk Builtin) LinearAssertion)
 compilePurifiedAssertion op args@(TensorOp2Args dims xs ys) = do
   maybeShape <- forceDims dims
   let shape = case maybeShape of
@@ -184,7 +184,7 @@ findVariableFromLevel = return . SliceVariable
 
 type MonadQuantifierBody m =
   ( MonadQueryStructure m,
-    MonadWriter [Value Builtin] m
+    MonadWriter [Thunk Builtin] m
   )
 
 unblockingActions :: (MonadQuantifierBody m) => UnblockingActions m
@@ -197,16 +197,16 @@ unblockingActions =
 unblockQuantifiedBoundVar ::
   (MonadQuantifierBody m) =>
   Lv ->
-  m (Value Builtin)
+  m (Thunk Builtin)
 unblockQuantifiedBoundVar lv =
   replaceTensorVariableWithStackedChildren (SliceVariable lv)
 
 unblockNetworkApplication ::
   (MonadQuantifierBody m) =>
-  (Value Builtin -> m (Value Builtin)) ->
+  (Thunk Builtin -> m (Thunk Builtin)) ->
   Identifier ->
-  NetworkAppArgs (Value Builtin) ->
-  m (Value Builtin)
+  NetworkAppArgs (Thunk Builtin) ->
+  m (Thunk Builtin)
 unblockNetworkApplication unblockFn ident (NetworkAppArgs arg) = do
   let name = nameOf ident
   networkInfo <- asks (lookupNetworkInfo name . networkCtx)
@@ -239,8 +239,8 @@ unblockNetworkApplication unblockFn ident (NetworkAppArgs arg) = do
 
 eliminateNotEqualRatTensor ::
   (MonadQueryStructure m) =>
-  TensorOp2Args (Value Builtin) ->
-  m (Value Builtin)
+  TensorOp2Args (Thunk Builtin) ->
+  m (Thunk Builtin)
 eliminateNotEqualRatTensor args@(TensorOp2Args dims _ _) = do
   PropertyMetaData {..} <- ask
   if supportsStrictInequalities queryFormat
@@ -254,8 +254,8 @@ eliminateTensorAssertion ::
   forall m.
   (MonadQueryStructure m) =>
   ComparisonOp ->
-  TensorOp2Args (Value Builtin) ->
-  m (Value Builtin)
+  TensorOp2Args (Thunk Builtin) ->
+  m (Thunk Builtin)
 eliminateTensorAssertion op (TensorOp2Args dims xs ys) = do
   maybeDimHead <- forceDimsHead dims
   case maybeDimHead of
@@ -270,7 +270,7 @@ eliminateTensorAssertion op (TensorOp2Args dims xs ys) = do
             }
     _ -> compilerDeveloperError ("unexpected dimensions" <+> prettyVerbose dims)
   where
-    etaReduceAndStack :: Int -> Value Builtin -> Value Builtin -> Value Builtin
+    etaReduceAndStack :: Int -> Thunk Builtin -> Thunk Builtin -> Thunk Builtin
     etaReduceAndStack d ds vs =
       fromRatTensorValue $
         VRatStackTensor $
@@ -283,7 +283,7 @@ eliminateTensorAssertion op (TensorOp2Args dims xs ys) = do
 
 networkEqualitiesToPartition ::
   (MonadQueryStructure m) =>
-  [Value Builtin] ->
+  [Thunk Builtin] ->
   m (MaybeTrivial Partitions)
 networkEqualitiesToPartition networkEqualities = do
   logDebugM MaxDetail $ do
@@ -317,7 +317,7 @@ catchableUnsupportedNonLinearConstraint =
   where
     x = developerError "Evaluating temporary quantifier error"
 
-showEntry :: (MonadQueryStructure m) => Value Builtin -> m ()
+showEntry :: (MonadQueryStructure m) => Thunk Builtin -> m ()
 showEntry v = do
   logDebugM MaxDetail $ do
     vDoc <- prettyFriendlyInCtx v

@@ -9,6 +9,7 @@ import Control.Monad.Except (MonadError (..))
 import Data.Data (Proxy (..))
 import Vehicle.Compile.Error
 import Vehicle.Compile.Normalise.Quote (unnormalise)
+import Vehicle.Compile.Normalise.Value
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
 import Vehicle.Compile.Type.Core
@@ -17,9 +18,9 @@ import Vehicle.Compile.Type.Meta.Set qualified as MetaSet
 import Vehicle.Compile.Type.Monad
 import Vehicle.Compile.Type.Monad.Class
 import Vehicle.Compile.Type.System
-import Vehicle.Data.Code.Value (Closure, ForcedValue (..), VBinder, VType, Value (..), boundContextToEnv, extendClosure, thunkifyExpr)
+import Vehicle.Data.Code.Value (Closure, Thunk (..), UnevaluatedThunk (..), VBinder, VType, Value (..), boundContextToEnv, extendClosure)
 import Vehicle.Data.Variable.Bound.Context.Generic
-import Vehicle.Data.Variable.Bound.Context.Name (NamedBoundCtx)
+import Vehicle.Data.Variable.Bound.Context.Name (NamedBoundCtx, runNameBoundContextT)
 import Prelude hiding (pi)
 
 -------------------------------------------------------------------------------
@@ -77,7 +78,7 @@ solveArgInsertionProblem ::
   ArgInsertionProblem builtin ->
   m (ArgInsertionProblemSolution builtin)
 solveArgInsertionProblem checkExprType ctx problem@ArgInsertionProblem {..} = do
-  (forcedExpectedType, blockingMetas) <- deepForceValue currentExpectedType
+  (forcedExpectedType, blockingMetas) <- runNameBoundContextT (toNamedBoundCtx ctx) $ forceValue currentExpectedType
   -- First see if the unnormalised type is correct.
   case forcedExpectedType of
     -- If a standard Pi type then proceed to check against it (need to do this first before we check if args
@@ -154,8 +155,8 @@ checkArgsAgainstPiType checkExprType ctx problem@ArgInsertionProblem {..} normBi
       instantiateArgForNonExplicitBinder ctx p original binder
 
   let newCheckedArgs = checkedArg : checkedArgs
-  let argValue = thunkifyExpr (boundContextToEnv ctx) $ argExpr checkedArg
-  let newExpectedType = extendClosure closure normBinder argValue
+  let argValue = Unforced $ UnevaluatedThunk (boundContextToEnv ctx) $ argExpr checkedArg
+  let newExpectedType = Unforced $ extendClosure closure normBinder argValue
   let newProblem =
         problem
           { checkedArgs = newCheckedArgs,

@@ -5,6 +5,7 @@ where
 
 import Data.Maybe (mapMaybe)
 import Vehicle.Compile.Error
+import Vehicle.Compile.Normalise.Value (forceValue)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Type.Constraint.Core
 import Vehicle.Compile.Type.Core
@@ -33,7 +34,7 @@ solveLinearityConstraint (WithContext normConstraint@(Resolve origin _ _ _ goal)
 --------------------------------------------------------------------------------
 -- Constraint solving
 
-pattern FLinearityExpr :: Linearity -> ForcedValue LinearityBuiltin
+pattern FLinearityExpr :: Linearity -> Value LinearityBuiltin
 pattern FLinearityExpr l <- VBuiltin (Linearity l) []
   where
     FLinearityExpr l = VBuiltin (Linearity l) []
@@ -62,13 +63,13 @@ solve = \case
 
 solveQuantifierLinearity :: Quantifier -> LinearitySolver
 solveQuantifierLinearity _ info [fn, res] = do
-  (forcedFn, blockingMetas) <- deepForceValue fn
+  (forcedFn, blockingMetas) <- forceValue fn
   case forcedFn of
     VPi binder body -> do
       let (varName, p) = getNamedBinderInfo binder
       let domainLin = Forced $ FLinearityExpr $ Linear (QuantifiedVariableProvenance p varName)
       closedBody <- extendClosureWithBound binder body
-      domEq <- createInstanceUnification info (Unforced $ typeOf binder) domainLin
+      domEq <- createInstanceUnification info (typeOf binder) domainLin
       resEq <- createInstanceUnification info res closedBody
       return $ Progress [domEq, resEq] []
     _ -> return $ Stuck blockingMetas
@@ -81,8 +82,8 @@ solveOp2Linearity ::
   LinearitySolver
 solveOp2Linearity shortCircuitLHS shortCircuitRHS combine info [lin1, lin2, res] =
   do
-    (flin1, blockingMetas1) <- deepForceValue lin1
-    (flin2, blockingMetas2) <- deepForceValue lin2
+    (flin1, blockingMetas1) <- forceValue lin1
+    (flin2, blockingMetas2) <- forceValue lin2
     case (flin1, flin2) of
       (FLinearityExpr l1, FLinearityExpr l2) -> do
         let linRes = Forced $ FLinearityExpr (combine l1 l2)
@@ -101,7 +102,7 @@ solveOp2Linearity _ _ _ _ _ = developerError "Malformed Op2Linearity"
 
 solveFunctionLinearity :: FunctionPosition -> LinearitySolver
 solveFunctionLinearity functionPosition info@(ctx, _) [arg, res] = do
-  (forcedArg, blockingMetas) <- deepForceValue arg
+  (forcedArg, blockingMetas) <- forceValue arg
   case forcedArg of
     FLinearityExpr lin -> do
       let p = provenanceOf ctx

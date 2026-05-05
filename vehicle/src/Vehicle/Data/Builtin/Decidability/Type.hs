@@ -223,7 +223,7 @@ convertToDecidabilityBuiltins p b args = return $
         And -> insertTypeArgumentAndConvertTo (TensorTypeClassFieldTC FieldAnd)
         Or -> insertTypeArgumentAndConvertTo (TensorTypeClassFieldTC FieldOr)
         Implies -> insertTypeArgumentAndConvertTo (TensorTypeClassFieldTC FieldImplies)
-        CompareRatTensorPointwise op -> insertTypeArgumentAndConvertTo (TensorTypeClassFieldTC $ FieldCompareRatTensorPointwise op)
+        CompareRatTensor op -> _ -- insertTypeArgumentAndConvertTo (TensorTypeClassFieldTC $ FieldCompareRatTensorPointwise op)
         ForeachTensor -> insertTypeArgumentAndConvertTo (TensorTypeClassFieldTC FieldForeachTensor)
         ReduceAndTensor -> insertTypeArgumentAndConvertTo (TensorTypeClassFieldTC FieldReduceAnd)
         ReduceOrTensor -> insertTypeArgumentAndConvertTo (TensorTypeClassFieldTC FieldReduceOr)

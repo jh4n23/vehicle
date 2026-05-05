@@ -2,36 +2,41 @@
 
 module Vehicle.Compile.Normalise.Value where
 
+import Control.Monad.Reader (MonadReader, ReaderT (..))
+import Control.Monad.Writer (MonadWriter, WriterT (..))
 import Data.Data (Proxy (..))
 import Vehicle.Compile.Normalise.Core
 import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Type.Core
+import Vehicle.Compile.Type.Meta (MetaSet)
+import Vehicle.Compile.Type.Meta.Substitution (MetaSubstitution)
 import Vehicle.Data.Code.Value
 import Vehicle.Data.Variable.Bound.Context.Name
 import Vehicle.Data.Variable.Free.Context
 
-forceValue :: (MonadNorm builtin m) => Value builtin -> m (ForcedValue builtin, BlockingMetas)
-forceValue = _
+forceValue :: (MonadNorm builtin m) => Thunk builtin -> m (Value builtin, BlockingMetas)
+forceValue value = runWriterT $ runReaderT _ _
 
 {-
-forceValue :: (MonadNorm builtin m) => Value builtin -> m (ForcedValue builtin)
+forceValue :: (MonadNorm builtin m) => Thunk builtin -> m (Value builtin)
 forceValue = \case
   Forced value -> return value
   Unforced thunk -> forceThunk thunk
 -}
-instance TypedEvalScheme (ForcedValue builtin) builtin m where
+instance (MonadNorm builtin m, MonadWriter MetaSet m, MonadReader (MetaSubstitution builtin) m) => TypedEvalScheme (Value builtin) builtin m where
+  handleUniverse _proxy = Just $ \lv -> return $ VUniverse lv
+  handlePi = Just $ \binder closure -> return $ VPi binder closure
+  handleLam = Just $ \binder closure -> return $ VLam binder closure
+  handleRecord = Just $ VRecord
+
   forceBuiltin = _
   forceMeta = _
-  handleUniverse proxy = Just VUniverse
   handleBoundVar = _
-  handlePi = Just VPi
-  handleLam = _
-  handleRecord = Just $ VRecord
   handleFreeVar = _
   handleRecordAcc = VRecordAcc
 
 -----------------------------------------------------------------------------
--- Value specific
+-- Thunk specific
 
 --     let recordType' = thunkifyExpr env recordType
 --     let fields' = mapRecordFields (thunkifyExpr env) fields
@@ -40,15 +45,15 @@ instance TypedEvalScheme (ForcedValue builtin) builtin m where
 forceValueInCtx ::
   (MonadNormCore builtin m, MonadFreeContext builtin m) =>
   NamedBoundCtx ->
-  Value builtin ->
-  m (ForcedValue builtin)
+  Thunk builtin ->
+  m (Value builtin)
 forceValueInCtx ctx value = runNameBoundContextT ctx (forceValue value)
 
 evalBuiltin ::
   (MonadNorm builtin m) =>
   builtin ->
   Spine builtin ->
-  m (ForcedValue builtin)
+  m (Value builtin)
 evalBuiltin builtin spine = do
   maybeResult <- evalBuiltinDetailed builtin spine
   case maybeResult of
@@ -81,7 +86,7 @@ forceExpr ::
   (MonadNorm builtin m) =>
   BoundEnv builtin ->
   Expr builtin ->
-  m (ForcedValue builtin)
+  m (Value builtin)
 forceExpr env expr = do
   showEntry env expr
   result <- case expr of
@@ -120,9 +125,9 @@ forceExpr env expr = do
 
 forceApp ::
   (MonadNorm builtin m) =>
-  Value builtin ->
+  Thunk builtin ->
   Spine builtin ->
-  m (ForcedValue builtin)
+  m (Value builtin)
 forceApp fun args = do
   forcedFun <- forceValue fun
   case args of

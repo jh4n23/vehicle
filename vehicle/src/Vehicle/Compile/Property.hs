@@ -6,10 +6,9 @@ where
 import Control.Monad.Except (ExceptT, MonadError (..), runExceptT)
 import Control.Monad.State (MonadTrans (..))
 import Vehicle.Compile.Error
-import Vehicle.Compile.Normalise.NBE (forceValue)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print.Warning ()
-import Vehicle.Compile.TypedView
+import Vehicle.Compile.TypedView.Core (BoolTensorExpr (..), TypeExpr (..))
 import Vehicle.Data.Builtin.Interface (Accessor (..))
 import Vehicle.Data.Builtin.Interface.Normalise (forceDim, forceDims)
 import Vehicle.Data.Builtin.Standard
@@ -25,15 +24,15 @@ import Vehicle.Verify.Specification
 traverseMultiProperty ::
   forall m a.
   (MonadFreeContext Builtin m) =>
-  (PropertyAddress -> Value Builtin -> m a) ->
+  (PropertyAddress -> Thunk Builtin -> m a) ->
   PropertyID ->
   Name ->
-  Value Builtin ->
-  Value Builtin ->
+  Thunk Builtin ->
+  Thunk Builtin ->
   m (Either MultiPropertyTraveralError (MultiProperty a))
 traverseMultiProperty compileProp propertyID propertyName declType declBody = runExceptT (go declType mempty declBody)
   where
-    go :: VType Builtin -> TensorIndices -> Value Builtin -> ExceptT MultiPropertyTraveralError m (MultiProperty a)
+    go :: VType Builtin -> TensorIndices -> Thunk Builtin -> ExceptT MultiPropertyTraveralError m (MultiProperty a)
     go typ indices body = do
       forcedType <- runFreshNameBoundContextT $ forceValue typ
       case toTypeValue forcedType of
@@ -49,7 +48,7 @@ traverseMultiProperty compileProp propertyID propertyName declType declBody = ru
             Just dims -> goTensor dims indices body
         _ -> throwError $ UnreducableType typ
 
-    goVector :: VType Builtin -> Int -> TensorIndices -> Value Builtin -> ExceptT MultiPropertyTraveralError m (MultiProperty a)
+    goVector :: VType Builtin -> Int -> TensorIndices -> Thunk Builtin -> ExceptT MultiPropertyTraveralError m (MultiProperty a)
     goVector typ _dim indices value = do
       forcedValue <- runFreshNameBoundContextT $ forceValue value
       case forcedValue of
@@ -59,7 +58,7 @@ traverseMultiProperty compileProp propertyID propertyName declType declBody = ru
           MultiProperty <$> traverse (\(i, e) -> go typ (i : indices) e) es'
         _ -> throwError $ UnsupportedVectorValue value
 
-    goTensor :: TensorShape -> TensorIndices -> Value Builtin -> ExceptT MultiPropertyTraveralError m (MultiProperty a)
+    goTensor :: TensorShape -> TensorIndices -> Thunk Builtin -> ExceptT MultiPropertyTraveralError m (MultiProperty a)
     goTensor dims indices value = case dims of
       [] -> do
         let address = PropertyAddress propertyID propertyName indices

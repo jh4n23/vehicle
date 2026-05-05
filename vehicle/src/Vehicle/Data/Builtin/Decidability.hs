@@ -7,7 +7,6 @@ where
 import Data.Hashable (Hashable)
 import GHC.Generics (Generic)
 import Vehicle.Compile.Normalise.Core
-import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Prelude (Expr (..), normAppList)
 import Vehicle.Data.Builtin.Core.BasicOperations
 import Vehicle.Data.Builtin.Core.Derived (DerivedFunction (..))
@@ -17,7 +16,7 @@ import Vehicle.Data.Builtin.Interface.Print
 import Vehicle.Data.Builtin.Standard (BuiltinConstructor (..), BuiltinFunction (..), BuiltinType (..))
 import Vehicle.Data.Code.DSL (tDim, tDims)
 import Vehicle.Data.Code.Interface
-import Vehicle.Data.Code.Value (ForcedValue (..), Value (..))
+import Vehicle.Data.Code.Value (Thunk (..), Value (..))
 import Vehicle.Data.DSL
 import Vehicle.Data.Tensor (BoolTensor, anyTensor)
 import Vehicle.Prelude (Pretty (..), Relevance (..), Visibility (..), developerError, explicit, (<+>))

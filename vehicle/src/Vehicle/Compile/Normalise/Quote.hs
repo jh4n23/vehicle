@@ -16,7 +16,7 @@ unnormalise = quote mempty
 unnormaliseInCtx ::
   forall expr m.
   (MonadReadableNameContext m, Show expr) =>
-  Value expr ->
+  Thunk expr ->
   m (Expr expr)
 unnormaliseInCtx e = do
   lv <- getBinderDepth
@@ -26,7 +26,9 @@ unnormaliseInCtx e = do
 -- Quoting closures
 
 quoteCtx :: Provenance -> Lv -> BoundEnv builtin -> Substitution (Expr builtin)
-quoteCtx p level env i = Right (quote p level (lookupIxInEnv env i))
+quoteCtx p level env i = case lookupIxInEnv env i of
+  Bound v -> Right $ quote p level v
+  Unbound v -> Left (quote p level v)
 
 -----------------------------------------------------------------------------
 -- Quoting expressions
@@ -43,19 +45,19 @@ instance Quote (GenericBinder expr, Closure builtin) (Expr builtin) where
     -- normBody <- runReaderT (eval (liftEnvOverBinder p env) body) mempty
     -- quotedBody <- quote (level + 1) normBody
     let newEnv = extendEnvWithBound lv binder env
-    quote p (lv + 1) (Thunk newEnv body)
+    quote p (lv + 1) (UnevaluatedThunk newEnv body)
 
-instance Quote (Thunk builtin) (Expr builtin) where
-  quote p lv (Thunk env body) = do
+instance Quote (UnevaluatedThunk builtin) (Expr builtin) where
+  quote p lv (UnevaluatedThunk env body) = do
     let subst = quoteCtx p lv env
     substituteDB 0 subst body
 
-instance Quote (Value builtin) (Expr builtin) where
+instance Quote (Thunk builtin) (Expr builtin) where
   quote p lv = \case
     Forced value -> quote p lv value
     Unforced env -> quote p lv env
 
-instance Quote (ForcedValue builtin) (Expr builtin) where
+instance Quote (Value builtin) (Expr builtin) where
   quote p level = \case
     VUniverse u -> Universe p u
     VMeta m spine -> quoteApp level p (Meta p m) spine

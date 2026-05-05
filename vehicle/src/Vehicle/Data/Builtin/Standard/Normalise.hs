@@ -137,14 +137,14 @@ evalVectorToList (VectorToListArgs t size xs) = do
     _ -> return $ Unevaluated [forcedSize]
 
 mkListExpr ::
-  (HasListExpr ForcedValue Value builtin) =>
-  Value builtin ->
-  [Value builtin] ->
-  Value builtin
+  (HasListExpr Value Thunk builtin) =>
+  Thunk builtin ->
+  [Thunk builtin] ->
+  Thunk builtin
 mkListExpr tElem = foldr (\x xs -> Forced $ ICons tElem x xs) (Forced $ INil tElem)
 
 mkDims ::
-  (HasNatExpr ForcedValue Value builtin, HasListExpr ForcedValue Value builtin, BuiltinHasNatType builtin) =>
+  (HasNatExpr Value Thunk builtin, HasListExpr Value Thunk builtin, BuiltinHasNatType builtin) =>
   [Int] ->
-  Value builtin
+  Thunk builtin
 mkDims ds = mkListExpr (Forced INatType) (fmap (Forced . INatLiteral) ds)

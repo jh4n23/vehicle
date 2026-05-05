@@ -84,7 +84,7 @@ comparisonOpToField = \case
 -- Tensor implementation
 
 type DifferentiableLogicImplementation =
-  ( Map TensorDifferentiableLogicField (Value LossBuiltin),
+  ( Map TensorDifferentiableLogicField (Thunk LossBuiltin),
     LogicDirection
   )
 

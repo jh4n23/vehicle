@@ -11,9 +11,8 @@ import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
 import Vehicle.Compile.Resource
-import Vehicle.Compile.TypedView (DimensionsValue (..), TypeValue (..), toDimensionsValue, toTypeValue)
+import Vehicle.Compile.TypedView.Core
 import Vehicle.Data.Builtin.Standard
-import Vehicle.Data.Code.Interface
 import Vehicle.Data.Code.Value
 import Vehicle.Data.Tensor (TensorShape)
 import Vehicle.Data.Variable.Bound.Context.Name
@@ -42,12 +41,12 @@ getNetworkType ::
   Type Builtin ->
   m NetworkType
 getNetworkType decl networkType = do
-  forcedNetworkType <- forceExpr emptyBoundEnv networkType
+  forcedNetworkType <- forceTypeExpr $ thunkifyExpr emptyBoundEnv networkType
   case forcedNetworkType of
-    VPi binder closure
+    VPiType binder closure
       | visibilityOf binder /= Explicit -> typingError
       | otherwise -> do
-          inputDetails <- tensorType Input (Unforced $ typeOf binder)
+          inputDetails <- tensorType Input (typeOf binder)
           outputType <- extendClosureWithBound binder closure
           outputDetails <- addNameToContext binder $ tensorType Output outputType
           let networkDetails = NetworkType inputDetails outputDetails
@@ -56,8 +55,8 @@ getNetworkType decl networkType = do
   where
     tensorType :: InputOrOutput -> VType Builtin -> m NetworkTensorType
     tensorType io t = do
-      forcedType <- forceValue t
-      case toTypeValue forcedType of
+      forcedType <- forceTypeExpr t
+      case forcedType of
         VTensorType _ dims -> do
           shape <- tensorDimensions io dims
           return $ NetworkTensorType NetworkRatType shape
@@ -65,18 +64,18 @@ getNetworkType decl networkType = do
 
     tensorDimensions :: InputOrOutput -> VType Builtin -> m TensorShape
     tensorDimensions io dims = do
-      forcedDims <- forceValue dims
-      case toDimensionsValue forcedDims of
+      forcedDims <- forceDimensionsExpr dims
+      case forcedDims of
         VDimsNil -> return []
         VDimsCons d ds -> (:) <$> tensorDimension io d <*> tensorDimensions io ds
         _ -> throwError $ NetworkTypeHasVariableSizeTensor decl networkType dims io
 
     tensorDimension :: InputOrOutput -> VType Builtin -> m Int
     tensorDimension io dim = do
-      forcedDim <- forceValue dim
+      forcedDim <- forceNatExpr dim
       case forcedDim of
-        INatLiteral n -> return n
-        VFreeVar varIdent _ -> do
+        VNatLiteral n -> return n
+        VNatParameter varIdent -> do
           implicitParameters <- getInferableParameterContext
           case Map.lookup varIdent implicitParameters of
             Just (_, _, Nothing) -> throwError $ NetworkTypeHasImplicitSizeTensor decl networkType varIdent io
