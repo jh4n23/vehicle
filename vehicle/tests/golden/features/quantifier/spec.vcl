@@ -1,12 +1,28 @@
-@network
-f : Tensor Real [2] -> Tensor Real [2]
+@tensor
+record Pair where
+  { a : Real
+  , b : Real
+  }
 
+minBound : Pair
+minBound = { a = 0, b = 0 }
+
+maxBound : Pair
+maxBound = { a = 10, b = 10 }
+
+add = minBound + maxBound
+
+@network
+f : Pair -> Pair
 
 @property
-expandedExpr : Bool
-expandedExpr = forall x . [0, 0] < x < [1, 1] => x ! 0 >= f x ! 0
+p : Bool
+p = (forall x . minBound <= x <= add => (f x).a >= x.a)
+
+-- @property
+-- simple : Bool
+-- simple = forall x . 0 <= x.a <= 1 => x.b <= (f x).b
 
 @property
 parallel : Bool
--- parallel = (forall x . 0 < x < 1 => f x >= 0) and (exists y . 0 < y < 1 and f y >= 5)
-parallel = True
+parallel = (forall x . minBound <= x <= maxBound => (f x).a >= 0) and (exists y . minBound <= y <= maxBound and (f y).b >= 5)

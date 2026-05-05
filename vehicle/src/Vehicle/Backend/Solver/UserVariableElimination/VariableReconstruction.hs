@@ -6,7 +6,7 @@ where
 import Control.Monad.Except (ExceptT, MonadError (..), runExceptT)
 import Data.Bifunctor (Bifunctor (..))
 import Data.Coerce (coerce)
-import Data.Foldable (foldlM)
+import Data.Foldable (foldlM, traverse_)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Map (Map)
@@ -45,8 +45,33 @@ reconstructUserVars variables (Reconstruction steps) networkVariableAssignment =
     let assignment = createInitialAssignment queryVariableMap networkVariableAssignment
     alteredAssignment <- foldlM (applyReconstructionStep vehicleVariableCtx) assignment steps
     finalAssignment <- createFinalAssignment vehicleVariableCtx userVariables alteredAssignment
+    -- lauren messed up stuff from here on out
+    --   newtype UserVariableAssignment
+    -- = UserVariableAssignment [UserVariableAssignmentType]
+    -- deriving (Generic)
+    -- data UserVariableAssignmentType 
+    -- = TensorAssignment (Name, RatTensor)
+    -- -- Attempting to cheat recordfields here
+    -- | RecordAssignment (Name, [(Name, RatTensor)])
+    -- deriving (Show, Generic)
+    traverse_ (reconstructRecords finalAssignment) steps
     logDebug MidDetail $ "User variables:" <> lineIndent (pretty finalAssignment)
     return finalAssignment
+
+reconstructRecords :: 
+  (MonadLogger m) =>
+  UserVariableAssignment ->
+  CompilationStep ->
+  m (UserVariableAssignment)
+reconstructRecords assignment step= do
+  case step of
+    ConvertQuantifiedTensorLike name fields -> do
+      logDebug MidDetail $ "FOUND RECORD VARIABE" <+> (pretty name) <+> (pretty fields)
+      return assignment
+    _ -> return assignment
+
+-- now just need to store the name of the quantified variable we used to wrap and swap that out for the record
+
 
 --------------------------------------------------------------------------------
 -- Mixed variable assignments

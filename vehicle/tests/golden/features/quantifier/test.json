@@ -10,7 +10,7 @@
     "needs": ["spec.vcl", "fake.onnx"],
     "produces": [
       "Marabou.queries/*.txt",
-      "Marabou.queries/expandedExpr.vcl-plan",
+      "Marabou.queries/p.vcl-plan",
       "Marabou.queries/parallel.vcl-plan"
     ],
     "ignore": {
@@ -19,7 +19,7 @@
   },
   {
     "name": "MarabouVerify",
-    "run": "vehicle verify -s spec.vcl -v TestVerifier --network f:fake.onnx --property expandedExpr --verifier-location=testVerifier --verifier-args='sat 'f_X[0]=0.2,f_X[1]=0.2,f_Y[0]=0.3,f_Y[1]=3.0'' --logging MaxDetail",
+    "run": "vehicle verify -s spec.vcl -v TestVerifier --network f:fake.onnx --property p --verifier-location=testVerifier --verifier-args='sat 'f_X[0]=0.2,f_X[1]=0.2,f_Y[0]=0.3,f_Y[1]=3.0'' --logging MaxDetail",
     "needs": ["spec.vcl", "fake.onnx", "../../../testVerifier"],
     "external": ["TestVerifier"]
   },
