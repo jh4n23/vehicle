@@ -1,6 +1,7 @@
 module Vehicle.Compile.TypedView.Unblock where
 
 import Control.Monad.Except
+import Vehicle.Compile.LowerNot (lowerNot)
 import Vehicle.Compile.Normalise.Core (BuiltinEvaluationResult (..), RecordExpr (..))
 import Vehicle.Compile.Normalise.NBE (forceThunk)
 import Vehicle.Compile.Prelude
@@ -43,32 +44,21 @@ forIfTreeM tree f = case tree of
   IfLeaf v -> f v
   IfTree c t1 t2 -> IfTree c <$> forIfTreeM t1 f <*> forIfTreeM t2 f
 
--- | A view on all possible expressions that can have type `Tensor Bool ds`
+-- | A view on all possible expressions that can have type `Tensor Bool []`
 -- and that we know how to compile to constraints.
-data CompilableBoolTensorExpr
-  = CBoolTensorLiteral (Tensor Bool)
-  | CBoolStackTensor (StackTensorArgs (Thunk Builtin))
-  | CBoolConstTensor (ConstTensorArgs (Thunk Builtin))
-  | CBoolTensorAnd (TensorOp2Args (Thunk Builtin))
-  | CBoolTensorOr (TensorOp2Args (Thunk Builtin))
-  | CBoolTensorCompareRat (ComparisonOp, TensorComparisonArgs (Thunk Builtin))
-  | CBoolTensorQuantifyRat (Quantifier, QuantifyRatTensorArgs (Thunk Builtin))
-  | CBoolTensorNot (TensorOp1Args (Thunk Builtin))
+data CompilableBoolExpr
+  = CBoolLiteral Bool
+  | CBoolAnd (TensorOp2Args (Thunk Builtin))
+  | CBoolOr (TensorOp2Args (Thunk Builtin))
+  | CBoolCompareRatTensor (ComparisonOp, TensorComparisonArgs (Thunk Builtin))
+  | CBoolQuantifyRatTensor (Quantifier, QuantifyRatTensorArgs (Thunk Builtin))
 
--- | A view on all possible compilable expressions that can have type `Tensor Rat`.
-data CompilableRatTensorValue
-  = CRatTensorLiteral (Tensor Rational)
-  | CRatConstTensor (ConstTensorArgs (Thunk Builtin))
-  | CRatStackTensor (StackTensorArgs (Thunk Builtin))
-
--- | Lifts all `if`s in the provided expression `e` to the top-level, while
--- preserving the guarantee that the expression is normalised as much as
--- possible.
+-- | Reduces an expression of type Bool to a CompilableBoolExpr.
 forceCompilableBoolExpr ::
-  (MonadUnblock m) =>
+  (MonadLogger m, MonadFreeContext Builtin m, MonadReadableNameContext m) =>
   UnblockingActions (ExceptT (Expr Builtin) m) ->
   Thunk Builtin ->
-  m CompilableBoolTensorExpr
+  m CompilableBoolExpr
 forceCompilableBoolExpr actions thunk = do
   exprDoc <- prettyFriendlyInCtx thunk
   logCompilerSection MaxDetail ("unblocking" <+> exprDoc) $ do
@@ -85,6 +75,17 @@ forceCompilableBoolExpr actions thunk = do
 type TypeUnblockingFunction compilableExpr m =
   (MonadUnblock m) => Thunk Builtin -> m compilableExpr
 
+-- | A view on all possible expressions that can have type `Tensor Bool ds`
+-- and that we know how to compile to constraints.
+data CompilableBoolTensorExpr
+  = CBoolTensorLiteral (Tensor Bool)
+  | CBoolStackTensor (StackTensorArgs (Thunk Builtin))
+  | CBoolConstTensor (ConstTensorArgs (Thunk Builtin))
+  | CBoolTensorAnd (TensorOp2Args (Thunk Builtin))
+  | CBoolTensorOr (TensorOp2Args (Thunk Builtin))
+  | CBoolTensorCompareRat (ComparisonOp, TensorComparisonArgs (Thunk Builtin))
+  | CBoolTensorQuantifyRat (Quantifier, QuantifyRatTensorArgs (Thunk Builtin))
+
 unblockBoolTensorValue :: UnblockingActions m -> TypeUnblockingFunction CompilableBoolTensorExpr m
 unblockBoolTensorValue actions thunk = do
   showEntry thunk
@@ -98,8 +99,8 @@ unblockBoolTensorValue actions thunk = do
     VBoolTensorOr args -> return $ CBoolTensorOr args
     VBoolTensorCompareRat args -> return $ CBoolTensorCompareRat args
     VBoolTensorQuantifyRat args -> return $ CBoolTensorQuantifyRat args
-    VBoolTensorNot args -> return $ CBoolTensorNot args
     -- Recursively unblock
+    VBoolTensorNot args -> unblockBoolTensorValue actions =<< lowerNot args
     VBoolTensorIf args -> elimIfTree <$> unblockIf unblock args
     VBoolTensorReduceAnd args -> elimIfTree <$> unblockReduceTensor unblock evalReduceAndTensor args
     VBoolTensorReduceOr args -> elimIfTree <$> unblockReduceTensor unblock evalReduceOrTensor args
@@ -109,6 +110,12 @@ unblockBoolTensorValue actions thunk = do
     VBoolTensorForeach args -> elimIfTree <$> unblockForeachTensor unblock args
   where
     unblock e = IfLeaf <$> unblockBoolTensorValue actions e
+
+-- | A view on all possible compilable expressions that can have type `Tensor Rat`.
+data CompilableRatTensorValue
+  = CRatTensorLiteral (Tensor Rational)
+  | CRatConstTensor (ConstTensorArgs (Thunk Builtin))
+  | CRatStackTensor (StackTensorArgs (Thunk Builtin))
 
 unblockRatTensorValue :: (MonadUnblock m) => UnblockingActions m -> TypeUnblockingFunction (IfTree CompilableRatTensorValue) m
 unblockRatTensorValue actions@UnblockingActions {..} expr = do

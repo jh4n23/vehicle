@@ -19,15 +19,12 @@ import Vehicle.Backend.Solver.UserVariableElimination.Error
 import Vehicle.Compile.Error
 import Vehicle.Compile.ExpandResources (expandResources)
 import Vehicle.Compile.ExpandResources.Core
-import Vehicle.Compile.LiftIf (unfoldIf)
-import Vehicle.Compile.LowerNot (lowerNot, negateQuantifierBody)
-import Vehicle.Compile.Normalise.NBE (forceValue)
+import Vehicle.Compile.LowerNot (negateQuantifierBody)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyFriendly, prettyFriendlyEmptyCtx)
 import Vehicle.Compile.Print.Warning ()
 import Vehicle.Compile.Property (traverseMultiProperty)
-import Vehicle.Compile.TypedView
-import Vehicle.Compile.TypedView.Unblock (UnblockingActions (..), unblockBoolExpr)
+import Vehicle.Compile.TypedView.Unblock (CompilableBoolExpr (..), UnblockingActions (..), forceCompilableBoolExpr)
 import Vehicle.Data.Builtin.Standard
 import Vehicle.Data.Code.BooleanExpr
 import Vehicle.Data.Code.Interface
@@ -198,32 +195,22 @@ compileQueries ::
 compileQueries value = do
   showTopLevelEntry value
   showTopLevelExit =<< do
-    forcedValue <- forceValue value
-    case toBoolValue forcedValue of
+    forcedValue <- forceCompilableBoolExpr topLevelUnblockingActions value
+    case forcedValue of
       ----------------
       -- Base cases --
       ----------------
-      VBoolLiteral b -> return $ Trivial b
-      VQuantifyRatTensor (Exists, args) -> compileQuantifiedQuerySet False args
-      VQuantifyRatTensor (Forall, args) -> do
+      CBoolLiteral b -> return $ Trivial b
+      CBoolQuantifyRatTensor (Exists, args) -> compileQuantifiedQuerySet False args
+      CBoolQuantifyRatTensor (Forall, args) -> do
         logDebug MaxDetail $ "negate" <+> pretty Forall
         negatedArgs <- negateQuantifierBody args
         compileQuantifiedQuerySet True negatedArgs
       ---------------------
       -- Recursive cases --
       ---------------------
-      VAnd (TensorOp2Args _dims e1 e2) -> andTrivial andBoolExpr <$> compileQueries e1 <*> compileQueries e2
-      VOr (TensorOp2Args _dims e1 e2) -> orTrivial orBoolExpr <$> compileQueries e1 <*> compileQueries e2
-      VBoolIf args -> compileQueries =<< unfoldIf args
-      -------------------------
-      -- Blocked expressions --
-      -------------------------
-      VReduceAndTensor {} -> compileQueries =<< unblock forcedValue
-      VReduceOrTensor {} -> compileQueries =<< unblock forcedValue
-      VBoolAt {} -> compileQueries =<< unblock forcedValue
-      VCompareIndex {} -> compileQueries =<< unblock forcedValue
-      VCompareNat {} -> compileQueries =<< unblock forcedValue
-      VNot args -> compileQueries =<< lowerNot args
+      CBoolAnd (TensorOp2Args _dims e1 e2) -> andTrivial andBoolExpr <$> compileQueries e1 <*> compileQueries e2
+      CBoolOr (TensorOp2Args _dims e1 e2) -> orTrivial orBoolExpr <$> compileQueries e1 <*> compileQueries e2
       -----------------
       -- Mixed cases --
       -----------------
@@ -234,9 +221,7 @@ compileQueries value = do
       --
       -- When we have the ability to evaluate networks then this case can be turned to a
       -- call to purify.
-      VCompareRatTensor {} -> compileUnquantifiedQuerySet value
-  where
-    unblock forcedValue = unblockBoolExpr topLevelUnblockingActions (Forced forcedValue)
+      CBoolCompareRatTensor {} -> compileUnquantifiedQuerySet value
 
 compileQuantifiedQuerySet ::
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m) =>

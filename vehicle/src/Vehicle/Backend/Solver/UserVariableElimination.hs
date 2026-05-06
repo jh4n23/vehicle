@@ -16,17 +16,15 @@ import Vehicle.Backend.Solver.UserVariableElimination.EliminateExists (eliminate
 import Vehicle.Compile.Constants.Rational
 import Vehicle.Compile.Error
 import Vehicle.Compile.ExpandResources.Core (lookupNetworkInfo)
-import Vehicle.Compile.LiftIf (unfoldIf)
-import Vehicle.Compile.LowerNot (lowerNot)
-import Vehicle.Compile.Normalise.NBE (extendClosureWithBound, forceValue)
+import Vehicle.Compile.Normalise.NBE (extendClosureWithBound)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Compile.Rational.LinearExpr (LinearityError (..), compileLinearAssertion)
 import Vehicle.Compile.TypedView
-import Vehicle.Compile.TypedView.Unblock (UnblockingActions (..))
-import Vehicle.Compile.TypedView.Unblock qualified as Unblocking
+import Vehicle.Compile.TypedView.Purification (purifyAssertion)
+import Vehicle.Compile.TypedView.Unblock (CompilableBoolExpr (..), UnblockingActions (..), forceCompilableBoolExpr)
 import Vehicle.Compile.Variable (createUserVar)
-import Vehicle.Data.Builtin.Interface (BuiltinHasBoolLiterals (accessCompareRatTensorReducedBuiltin), applyAccessor)
+import Vehicle.Data.Builtin.Interface
 import Vehicle.Data.Builtin.Interface.Normalise (forceDims, forceDimsHead, unforcedBuiltinApp)
 import Vehicle.Data.Builtin.Standard
 import Vehicle.Data.Builtin.Standard.Normalise (mkDims)
@@ -100,30 +98,20 @@ compileBoolExpr ::
 compileBoolExpr value = do
   showEntry value
   showExit =<< do
-    forcedValue <- forceValue value
-    case toBoolValue forcedValue of
+    forcedValue <- forceCompilableBoolExpr unblockingActions value
+    case forcedValue of
       ----------------
       -- Base cases --
       ----------------
-      VBoolLiteral b -> return $ Trivial b
-      VCompareRatTensor (op, args) -> purifyAndCompileAssertion op args
-      VQuantifyRatTensor (Forall, _) -> throwError catchableUnsupportedAlternatingQuantifiersError
+      CBoolLiteral b -> return $ Trivial b
+      CBoolCompareRatTensor (op, args) -> purifyAndCompileAssertion op args
+      CBoolQuantifyRatTensor (Forall, _) -> throwError catchableUnsupportedAlternatingQuantifiersError
       ---------------------
       -- Recursive cases --
       ---------------------
-      VNot arg -> compileBoolExpr =<< lowerNot arg
-      VBoolIf args -> compileBoolExpr =<< unfoldIf args
-      VAnd (TensorOp2Args _dims x y) -> andTrivial andPartitions <$> compileBoolExpr x <*> compileBoolExpr y
-      VOr (TensorOp2Args _dims x y) -> orTrivial orPartitions <$> compileBoolExpr x <*> compileBoolExpr y
-      VQuantifyRatTensor (Exists, args) -> eliminateExists args
-      VCompareNat {} -> unblockAndRec forcedValue
-      VCompareIndex {} -> unblockAndRec forcedValue
-      VReduceAndTensor {} -> unblockAndRec forcedValue
-      VReduceOrTensor {} -> unblockAndRec forcedValue
-      VBoolAt {} -> unblockAndRec forcedValue
-  where
-    unblock forcedValue = Unblocking.unblockBoolExpr unblockingActions (Forced forcedValue)
-    unblockAndRec e = compileBoolExpr =<< unblock e
+      CBoolAnd (TensorOp2Args _dims x y) -> andTrivial andPartitions <$> compileBoolExpr x <*> compileBoolExpr y
+      CBoolOr (TensorOp2Args _dims x y) -> orTrivial orPartitions <$> compileBoolExpr x <*> compileBoolExpr y
+      CBoolQuantifyRatTensor (Exists, args) -> eliminateExists args
 
 purifyAndCompileAssertion ::
   (MonadQuantifierBody m) =>
@@ -136,7 +124,7 @@ purifyAndCompileAssertion op args
       compileBoolExpr =<< eliminateNotEqualRatTensor args
   | otherwise = do
       recurseOrResult <- logCompilerSection2 MaxDetail "assertion compilation" $ do
-        maybePurifiedValue <- Unblocking.tryPurifyAssertion unblockingActions op args
+        maybePurifiedValue <- purifyAssertion unblockingActions op args
         case maybePurifiedValue of
           Left purifiedValue -> return $ Left purifiedValue
           Right purifiedArgs -> compilePurifiedAssertion op purifiedArgs
@@ -162,8 +150,6 @@ compilePurifiedAssertion op args@(TensorOp2Args dims xs ys) = do
       return $ Right assertion
     Left NonLinearity ->
       throwError catchableUnsupportedNonLinearConstraint
-    Left (UnexpectedExpr e) ->
-      developerError ("unexpected expression" <+> prettyVerbose e)
     Left (TrivialExpr b) ->
       return $ Left $ Forced $ IBoolLiteral b
     Left (UnreducedExpr e) -> do
@@ -262,18 +248,18 @@ eliminateTensorAssertion op (TensorOp2Args dims xs ys) = do
     Just (d, ds) ->
       return $
         unforcedBuiltinApp (applyAccessor accessCompareRatTensorReducedBuiltin op) $
-          TensorReduceComparisonArgs
-            { tensorReduceOp2Dim = Forced $ INatLiteral d,
-              tensorReduceOp2Dims = ds,
-              tensorReduceOp2Arg1 = etaReduceAndStack d ds xs,
-              tensorReduceOp2Arg2 = etaReduceAndStack d ds ys
+          TensorComparisonArgs
+            { tensorComparisonPointwiseDims = _,
+              tensorComparisonReducedDims = _,
+              tensorComparisonOpArg1 = etaReduceAndStack d ds xs,
+              tensorComparisonOpArg2 = etaReduceAndStack d ds ys
             }
     _ -> compilerDeveloperError ("unexpected dimensions" <+> prettyVerbose dims)
   where
     etaReduceAndStack :: Int -> Thunk Builtin -> Thunk Builtin -> Thunk Builtin
     etaReduceAndStack d ds vs =
-      fromRatTensorValue $
-        VRatStackTensor $
+      Forced $
+        mkExpr accessStackTensor $
           StackTensorArgs
             { stackType = Forced IRatType,
               stackFirstDim = Forced $ INatLiteral d,

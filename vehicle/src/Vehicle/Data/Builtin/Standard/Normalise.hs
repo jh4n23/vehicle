@@ -49,7 +49,7 @@ instance HasLiftableTensorOperations Builtin where
       compPointwise Gt
     ]
     where
-      compPointwise op = (accessArgsForOp accessCompareRatTensorPointwise op, applyAccessor accessCompareRatTensorPointwiseBuiltin op, Forced IBoolType)
+      compPointwise op = (accessArgsForOp accessCompareRatTensor op, applyAccessor accessCompareRatTensorPointwiseBuiltin op, Forced IBoolType)
 
 instance NormalisableBuiltin Builtin where
   evaluationScheme = \case

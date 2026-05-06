@@ -112,7 +112,7 @@ findReturnType ::
   Thunk DecidabilityBuiltin ->
   m (Value DecidabilityBuiltin)
 findReturnType typ = do
-  forcedType <- forceValue typ
+  forcedType <- forceTypeExpr typ
   case forcedType of
     VPi binder closure -> do
       body <- extendClosureWithBound binder closure

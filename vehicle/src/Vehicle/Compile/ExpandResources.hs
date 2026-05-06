@@ -45,7 +45,7 @@ expandResources resources prog =
     integrityInfo <- generateResourcesIntegrityInfo resources
     return (finalProg, networkCtx, integrityInfo, missingResources, uninferableParameters)
 
-mkFunctionDefFromResource :: Provenance -> Identifier -> Type Builtin -> Thunk Builtin -> Decl Builtin
+mkFunctionDefFromResource :: Provenance -> Identifier -> Type Builtin -> Value Builtin -> Decl Builtin
 mkFunctionDefFromResource p ident typ normValue = do
   let sort = FunctionDecl 0 Nothing
   let body = unnormalise 0 normValue
