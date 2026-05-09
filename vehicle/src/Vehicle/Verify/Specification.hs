@@ -67,7 +67,7 @@ data CompilationStep
   = SolveEquality NestedSliceVariable LinearExpression
   | SolveInequalities SliceVariable LinearBounds
   | ReconstructTensorVariable NestedSliceVariable ReconstructionDepth
-  | ConvertQuantifiedTensorLike Name [FieldName]
+  | ConvertQuantifiedTensorLike Name Name [FieldName]
   -- LAUREN TODO: we would want to add a step here to convert record to tensor
   deriving (Show, Eq, Ord, Generic)
 

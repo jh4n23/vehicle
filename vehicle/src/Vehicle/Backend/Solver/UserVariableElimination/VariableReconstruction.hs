@@ -6,7 +6,7 @@ where
 import Control.Monad.Except (ExceptT, MonadError (..), runExceptT)
 import Data.Bifunctor (Bifunctor (..))
 import Data.Coerce (coerce)
-import Data.Foldable (foldlM, traverse_)
+import Data.Foldable (foldlM)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Map (Map)
@@ -27,6 +27,7 @@ import Vehicle.Verify.Core
 import Vehicle.Verify.QueryFormat.Core
 import Vehicle.Verify.Specification
 import Vehicle.Verify.Verifier.Core
+import Data.List ( find, delete )
 
 --------------------------------------------------------------------------------
 -- Variable reconstruction
@@ -54,24 +55,53 @@ reconstructUserVars variables (Reconstruction steps) networkVariableAssignment =
     -- -- Attempting to cheat recordfields here
     -- | RecordAssignment (Name, [(Name, RatTensor)])
     -- deriving (Show, Generic)
-    traverse_ (reconstructRecords finalAssignment) steps
+    newSteps <- reconstructRecords finalAssignment steps
     logDebug MidDetail $ "User variables:" <> lineIndent (pretty finalAssignment)
-    return finalAssignment
+    return newSteps
 
-reconstructRecords :: 
+reconstructRecords ::
   (MonadLogger m) =>
   UserVariableAssignment ->
-  CompilationStep ->
-  m (UserVariableAssignment)
-reconstructRecords assignment step= do
-  case step of
-    ConvertQuantifiedTensorLike name fields -> do
-      logDebug MidDetail $ "FOUND RECORD VARIABE" <+> (pretty name) <+> (pretty fields)
-      return assignment
-    _ -> return assignment
+  [CompilationStep] ->
+  m UserVariableAssignment
+reconstructRecords (UserVariableAssignment assignments) steps = do
+  case steps of 
+    [x] -> checkStep x
+    (x:xs) -> do 
+      newAssignment <- checkStep x
+      reconstructRecords newAssignment xs
+    _ -> developerError "yeet"
+  where
+    checkStep step = do
+      case step of
+        ConvertQuantifiedTensorLike tensorName recordName fieldNames -> do
+          logDebug MidDetail $
+            "FOUND RECORD VARIABLE"
+              <+> pretty recordName
+              <+> pretty tensorName
+              <+> pretty fieldNames
 
--- now just need to store the name of the quantified variable we used to wrap and swap that out for the record
+          let tensorAssignment =
+                find
+                  (\case
+                    TensorAssignment (tn, _) -> tn == tensorName
+                    _ -> False)
+                  assignments
 
+          tensorValue <- case tensorAssignment of
+            Just (TensorAssignment ( _ , t)) -> return t
+            _ -> developerError "die rip"
+
+          let fieldIndices = [0 .. length fieldNames - 1] :: [Int]
+          let tensorIndices = map (\i -> at tensorValue i) fieldIndices
+          let fields = zip fieldNames tensorIndices
+          let assignment = RecordAssignment (recordName, fields)
+          logDebug MidDetail $ "ASSIGNMENT:" <+> pretty assignment
+
+          let newMap = delete (TensorAssignment (tensorName, tensorValue)) assignments ++ [assignment]
+
+          return $ UserVariableAssignment newMap
+        _ -> return $ UserVariableAssignment assignments
 
 --------------------------------------------------------------------------------
 -- Mixed variable assignments

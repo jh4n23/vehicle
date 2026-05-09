@@ -308,9 +308,10 @@ wrapQuantifyRecord QuantifyRecordArgs{..} = do
   namedCtx <- getNameContext
   normalisedTensorType <- eval namedCtx boundEnv tensorType
   normalisedDims <- eval namedCtx boundEnv dims
+  let tensorBinderName = getFreshTensorBinderName namedCtx
 
   let tensorBinder = Binder { 
-    binderDisplayForm = BinderDisplayForm (NameAndType (getFreshTensorBinderName namedCtx) mempty) True,
+    binderDisplayForm = BinderDisplayForm (NameAndType tensorBinderName mempty) True,
     binderVisibility = Explicit,
     binderRelevance = Relevant,
     binderValue = normalisedTensorType
@@ -330,7 +331,7 @@ wrapQuantifyRecord QuantifyRecordArgs{..} = do
   let name = fromMaybe (developerError "Quantified variable binder should have name") (nameOf quantifyRecordBinder)
   fields <- getRecordFieldNames recordTypeDecl
 
-  return (ratTensorArgs, ConvertQuantifiedTensorLike name fields)
+  return (ratTensorArgs, ConvertQuantifiedTensorLike tensorBinderName name fields)
 
 compileUnquantifiedQuerySet ::
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m) =>
