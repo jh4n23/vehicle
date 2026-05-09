@@ -46,41 +46,21 @@ reconstructUserVars variables (Reconstruction steps) networkVariableAssignment =
     let assignment = createInitialAssignment queryVariableMap networkVariableAssignment
     alteredAssignment <- foldlM (applyReconstructionStep vehicleVariableCtx) assignment steps
     finalAssignment <- createFinalAssignment vehicleVariableCtx userVariables alteredAssignment
-    -- lauren messed up stuff from here on out
-    --   newtype UserVariableAssignment
-    -- = UserVariableAssignment [UserVariableAssignmentType]
-    -- deriving (Generic)
-    -- data UserVariableAssignmentType 
-    -- = TensorAssignment (Name, RatTensor)
-    -- -- Attempting to cheat recordfields here
-    -- | RecordAssignment (Name, [(Name, RatTensor)])
-    -- deriving (Show, Generic)
-    newSteps <- reconstructRecords finalAssignment steps
-    logDebug MidDetail $ "User variables:" <> lineIndent (pretty finalAssignment)
-    return newSteps
+    recordSubstAssignment <- reconstructRecords finalAssignment steps
+    logDebug MidDetail $ "User variables:" <> lineIndent (pretty recordSubstAssignment)
+    return recordSubstAssignment
 
 reconstructRecords ::
   (MonadLogger m) =>
   UserVariableAssignment ->
   [CompilationStep] ->
   m UserVariableAssignment
-reconstructRecords (UserVariableAssignment assignments) steps = do
-  case steps of 
-    [x] -> checkStep x
-    (x:xs) -> do 
-      newAssignment <- checkStep x
-      reconstructRecords newAssignment xs
-    _ -> developerError "yeet"
+reconstructRecords existingAssignment steps = do
+  foldlM checkStep existingAssignment steps
   where
-    checkStep step = do
+    checkStep (UserVariableAssignment assignments) step = do
       case step of
         ConvertQuantifiedTensorLike tensorName recordName fieldNames -> do
-          logDebug MidDetail $
-            "FOUND RECORD VARIABLE"
-              <+> pretty recordName
-              <+> pretty tensorName
-              <+> pretty fieldNames
-
           let tensorAssignment =
                 find
                   (\case
@@ -96,7 +76,6 @@ reconstructRecords (UserVariableAssignment assignments) steps = do
           let tensorIndices = map (\i -> at tensorValue i) fieldIndices
           let fields = zip fieldNames tensorIndices
           let assignment = RecordAssignment (recordName, fields)
-          logDebug MidDetail $ "ASSIGNMENT:" <+> pretty assignment
 
           let newMap = delete (TensorAssignment (tensorName, tensorValue)) assignments ++ [assignment]
 
