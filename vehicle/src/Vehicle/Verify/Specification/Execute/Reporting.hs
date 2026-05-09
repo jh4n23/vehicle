@@ -22,7 +22,7 @@ import Data.ByteString.Lazy.Char8 qualified as ByteString (unpack)
 import Data.Text (intercalate, pack)
 import Data.Text.Lazy qualified as LazyText
 import GHC.Generics (Generic)
-import Prettyprinter (fill)
+import Prettyprinter (fill, fillSep)
 import System.Console.ANSI (Color (..))
 import System.IO (stdout)
 import System.ProgressBar
@@ -269,7 +269,7 @@ prettyUserVariableAssignment (UserVariableAssignment assignment) = do
     prettyLine a = do
       case a of 
         TensorAssignment (var, value) -> pretty var <> ":" <+> pretty value
-        RecordAssignment (var, value) -> pretty var <> ":" <+> vsep (fmap (\(name, tens) -> pretty name <+> pretty tens) value)
+        RecordAssignment (var, fields) -> pretty var <> ":" <+> "{" <+> fillSep (fmap (\(name, tens) -> pretty name <+> "=" <+> pretty tens) fields) <+> "}"
 
 
 
