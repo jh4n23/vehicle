@@ -232,7 +232,6 @@ delabDerivedFunction fun args = case fun of
   V.TypeAnn -> delabInfixOp2 B.Ann tokElemOf (reverse args)
   V.QuantifyIndex q -> delabQuantifier q args
   V.QuantifyInList q -> delabQuantifierIn q args
-  V.CompareRatTensorReduced op -> delabTypeClassOp (V.CompareTC op) args
 
 delabBuiltinFunction :: (MonadDelab m) => V.BuiltinFunction -> [V.Arg V.Builtin] -> m B.Expr
 delabBuiltinFunction fun args = case fun of

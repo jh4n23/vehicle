@@ -20,6 +20,7 @@ import Data.Text.Internal.Read qualified as Text.Read
 import Data.Version (makeVersion)
 import GHC.Real (denominator, numerator)
 import Prettyprinter hiding (hcat, hsep, vcat, vsep)
+import Vehicle.Backend.ITP.Core
 import Vehicle.Backend.Prelude
 import Vehicle.Compile.Error
 import Vehicle.Compile.Prelude
@@ -515,7 +516,20 @@ compileBuiltin b args = case b of
     Max MaxRatTensor -> compileApplication [RequireImport VehicleTensor, Import OrderDef] "max" args
     CompareIndex op -> compileComparison CIndex op args
     CompareNat op -> compileComparison CNat op args
-    CompareRatTensorPointwise op -> compileComparison CRatTensor op args
+    CompareRatTensor op -> case comparisonType args of
+      Pointwise pArgs -> compileComparison CRatTensor op pArgs
+      Reduced rArgs ->
+        compileApplication
+          [RequireImport VehicleUtils]
+          ( case op of
+              Le -> "leRatTensorReduced"
+              Lt -> "ltRatTensorReduced"
+              Ge -> "geRatTensorReduced"
+              Gt -> "gtRatTensorReduced"
+              Eq -> "eqRatTensorReduced"
+              Ne -> "neRatTensorReduced"
+          )
+          rArgs
     FoldList -> compileApplication [MathcompImport Boot] "foldr" args
     MapList -> compileApplication [MathcompImport Boot] "map" args
     ReduceAndTensor -> compileApplication [RequireImport VehicleUtils] "reduceAnd" args
@@ -604,18 +618,6 @@ compileDerivedFunction fn args = case fn of
   QuantifyInList {} -> unsupported
   TypeAnn ->
     compileNotationAndArgs [] NotAssociative (Just 99) "$1 : $0" Nothing args
-  CompareRatTensorReduced op ->
-    compileApplication
-      [RequireImport VehicleUtils]
-      ( case op of
-          Le -> "leRatTensorReduced"
-          Lt -> "ltRatTensorReduced"
-          Ge -> "geRatTensorReduced"
-          Gt -> "gtRatTensorReduced"
-          Eq -> "eqRatTensorReduced"
-          Ne -> "neRatTensorReduced"
-      )
-      args
   where
     unsupported = developerError $ "Compilation of stdlib function" <+> quotePretty fn <+> "not implemented"
 

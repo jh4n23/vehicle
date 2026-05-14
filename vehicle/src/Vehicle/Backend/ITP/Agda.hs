@@ -20,6 +20,7 @@ import Data.Version (makeVersion)
 import GHC.Real (denominator, numerator)
 import Prettyprinter hiding (hcat, hsep, vcat, vsep)
 import System.FilePath (takeBaseName)
+import Vehicle.Backend.ITP.Core (ComparisonType (..), comparisonType)
 import Vehicle.Backend.Prelude
 import Vehicle.Compile.CapitaliseTypeNames (capitaliseTypeNames)
 import Vehicle.Compile.Error
@@ -510,8 +511,6 @@ compileDerivedFunction fn args = case fn of
     Exists -> annotateApp [DataList] (Just listQualifier) "any" args
     Forall -> annotateApp [DataList] (Just listQualifier) "all" args
   TypeAnn -> annotateInfixApp [FunctionBase] 0 Nothing "_∋_" args
-  CompareRatTensorReduced op ->
-    annotateInfixApp [DataTensor] 4 Nothing ("_" <> comparisonOperatorBase True op <> "_") args
 
 --------------------------------------------------------------------------------
 -- Compilation of builtins
@@ -578,7 +577,9 @@ compileBuiltinFunction f args = case f of
   Max MaxRatTensor -> annotateInfixApp [DataTensor] 7 (Just tensorQualifier) "_⊔_" args
   CompareIndex op -> annotateInfixApp [VehicleUtils, DataFin] 4 Nothing (comparisonOperator True op) args
   CompareNat op -> annotateInfixApp [VehicleUtils, DataNat] 4 Nothing (comparisonOperator True op) args
-  CompareRatTensorPointwise op -> annotateInfixApp [VehicleUtils, DataTensor] 4 Nothing ("_" <> comparisonOperatorBase True op <> "∙_") args
+  CompareRatTensor op -> case comparisonType args of
+    Reduced rArgs -> annotateInfixApp [DataTensor] 4 Nothing ("_" <> comparisonOperatorBase True op <> "_") rArgs
+    Pointwise pArgs -> annotateInfixApp [VehicleUtils, DataTensor] 4 Nothing ("_" <> comparisonOperatorBase True op <> "∙_") pArgs
   FoldList -> annotateApp [DataList] (Just listQualifier) "foldr" args
   MapList -> annotateApp [DataList] (Just listQualifier) "map" args
   ReduceAndTensor -> annotateApp [DataTensor] Nothing "reduceAnd" args

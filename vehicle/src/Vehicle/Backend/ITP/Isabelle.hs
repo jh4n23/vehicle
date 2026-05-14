@@ -24,6 +24,7 @@ import GHC.Real (denominator, numerator)
 import Prettyprinter hiding (hcat, hsep, vcat, vsep)
 import Prettyprinter.Render.Text (renderStrict)
 import System.FilePath (takeBaseName)
+import Vehicle.Backend.ITP.Core
 import Vehicle.Backend.Prelude
 import Vehicle.Compile.Error
 import Vehicle.Compile.Prelude
@@ -759,7 +760,21 @@ compileBuiltin isOutType localeAssms b args = case b of
     Max MaxRatTensor -> annotateApp localeAssms [RequireImport VehicleTensor, RequireImport VehicleUtils] "pointwise_max" args
     CompareIndex op -> compileComparison localeAssms CIndex op args
     CompareNat op -> compileComparison localeAssms CNat op args
-    CompareRatTensorPointwise op -> compileTensorComparison localeAssms CRatTensor op args
+    CompareRatTensor op -> case comparisonType args of
+      Pointwise pArgs -> compileTensorComparison localeAssms CRatTensor op pArgs
+      Reduced rArgs ->
+        annotateApp
+          localeAssms
+          [RequireImport VehicleUtils]
+          ( case op of
+              Le -> "leRatTensorReduced"
+              Lt -> "ltRatTensorReduced"
+              Ge -> "geRatTensorReduced"
+              Gt -> "gtRatTensorReduced"
+              Eq -> "eqRatTensorReduced"
+              Ne -> "neRatTensorReduced"
+          )
+          rArgs
     FoldList -> annotateApp localeAssms [] "foldr" args
     MapList -> annotateApp localeAssms [] "map" args
     ReduceAndTensor -> annotateApp localeAssms [RequireImport VehicleUtils] "reduceAnd" args
@@ -854,19 +869,6 @@ compileDerivedFunction localeAssms fn args = case fn of
     Forall -> annotateApp localeAssms [RequireImport VehicleUtils] "forallIndex" args
   QuantifyInList {} -> unsupported
   TypeAnn -> annotateNotation localeAssms [] minPrecedence "$1 :: $0" Nothing args
-  CompareRatTensorReduced op ->
-    annotateApp
-      localeAssms
-      [RequireImport VehicleUtils]
-      ( case op of
-          Le -> "leRatTensorReduced"
-          Lt -> "ltRatTensorReduced"
-          Ge -> "geRatTensorReduced"
-          Gt -> "gtRatTensorReduced"
-          Eq -> "eqRatTensorReduced"
-          Ne -> "neRatTensorReduced"
-      )
-      args
   where
     unsupported = developerError $ "Compilation of stdlib function" <+> quotePretty fn <+> "not implemented"
 

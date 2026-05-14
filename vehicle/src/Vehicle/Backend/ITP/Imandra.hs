@@ -22,6 +22,7 @@ import Data.Text qualified as Text
 import GHC.Real (denominator, numerator)
 import Prettyprinter hiding (hcat, hsep, vcat, vsep)
 import System.FilePath (takeBaseName)
+import Vehicle.Backend.ITP.Core
 import Vehicle.Backend.Prelude
 import Vehicle.Compile.Error
 import Vehicle.Compile.Prelude
@@ -658,7 +659,21 @@ compileBuiltin _isOutType moduleDefs b args = case b of
     Max MaxRatTensor -> annotateApp moduleDefs [RequireImport ImlVehicle] "pointwise_max_real" args
     CompareIndex op -> compileComparison moduleDefs CIndex op args
     CompareNat op -> compileComparison moduleDefs CNat op args
-    CompareRatTensorPointwise op -> compileTensorComparison moduleDefs CRatTensor op args
+    CompareRatTensor op -> case comparisonType args of
+      Pointwise pArgs -> compileTensorComparison moduleDefs CRatTensor op pArgs
+      Reduced rArgs ->
+        annotateApp
+          moduleDefs
+          [RequireImport ImlVehicle]
+          ( case op of
+              Le -> "leq_tensor_reduced_real"
+              Lt -> "lt_tensor_reduced_real"
+              Ge -> "geq_tensor_reduced_real"
+              Gt -> "gt_tensor_reduced_real"
+              Eq -> "eq_tensor_reduced_real"
+              Ne -> "ne_tensor_reduced_real"
+          )
+          rArgs
     FoldList -> annotateApp moduleDefs [] "List.fold_right" args
     MapList -> annotateApp moduleDefs [] "List.map" args
     ReduceAndTensor -> annotateApp moduleDefs [RequireImport ImlVehicle] "reduce_and" args
@@ -745,19 +760,6 @@ compileDerivedFunction moduleDefs fn args = case fn of
     Forall -> annotateApp moduleDefs [RequireImport ImlVehicle] "forall_index" args
   QuantifyInList {} -> unsupported
   TypeAnn -> annotateNotation moduleDefs [] minPrecedence "($1 : $0)" Nothing args
-  CompareRatTensorReduced op ->
-    annotateApp
-      moduleDefs
-      [RequireImport ImlVehicle]
-      ( case op of
-          Le -> "leq_tensor_reduced_real"
-          Lt -> "lt_tensor_reduced_real"
-          Ge -> "geq_tensor_reduced_real"
-          Gt -> "gt_tensor_reduced_real"
-          Eq -> "eq_tensor_reduced_real"
-          Ne -> "ne_tensor_reduced_real"
-      )
-      args
   where
     unsupported = developerError $ "Compilation of stdlib function" <+> quotePretty fn <+> "not implemented"
 
