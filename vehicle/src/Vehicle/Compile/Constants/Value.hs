@@ -18,28 +18,24 @@ import Vehicle.Prelude.Logging
 --------------------------------------------------------------------------------
 -- Tensors of values
 
-type HasRatTensors builtin =
-  ( HasRatExpr Value builtin,
-    HasRatType Value builtin,
-    HasTensorLiterals Value builtin
-  )
+type TensorValue = DimensionedTensorValue LossBuiltin
 
-type TensorValueLinearExpr builtin = LinearExpr SliceVariable (DimensionedTensorValue builtin)
+type TensorValueLinearExpr = LinearExpr SliceVariable TensorValue
 
-tensorValueLinearExprToValue :: (HasRatTensors builtin) => LinearExpr SliceVariable (DimensionedTensorValue builtin) -> DimensionedTensorValue builtin
-tensorValueLinearExprToValue linearExpr = do
+tensorValueLinarExprToValue :: LinearExpr SliceVariable TensorValue -> TensorValue
+tensorValueLinarExprToValue linearExpr = do
   let dims = tensorValueDims $ constantValue linearExpr
   let mkVarTerm v = TensorValue dims (VBoundVar (toLv v) [])
   let mkTerm (v, coeff) = scaleConstant coeff (mkVarTerm v)
   linearExprToExpr id mkTerm (addConstants 1 1) linearExpr
 
-type UserVariableConstraint builtin = Assertion (TensorValueLinearExpr builtin)
+type UserVariableConstraint = Assertion TensorValueLinearExpr
 
 -- | An `AssertionTree` represents a boolean expression with assertions at
 -- each terminal leaf.
-type UserVariableConstraintTree = BooleanExpr (UserVariableConstraint LossBuiltin)
+type UserVariableConstraintTree = BooleanExpr UserVariableConstraint
 
-constantDimensionedValue :: (HasRatTensors builtin) => VDims builtin -> Rational -> DimensionedTensorValue builtin
+constantDimensionedValue :: VDims LossBuiltin -> Rational -> TensorValue
 constantDimensionedValue dims constant =
   TensorValue dims $
     runSilentLogger $
@@ -50,31 +46,31 @@ constantDimensionedValue dims constant =
             constDims = dims
           }
 
-addDimensionedValue :: (HasRatTensors builtin) => DimensionedTensorValue builtin -> DimensionedTensorValue builtin -> DimensionedTensorValue builtin
+addDimensionedValue :: TensorValue -> TensorValue -> TensorValue
 addDimensionedValue (TensorValue dims1 e1) (TensorValue _dims2 e2) = do
   TensorValue dims1 $
     runSilentLogger $
       evalAddRatTensor $
         TensorOp2Args dims1 e1 e2
 
-scaleDimensionedValue :: (HasRatTensors builtin) => Coefficient -> DimensionedTensorValue builtin -> DimensionedTensorValue builtin
+scaleDimensionedValue :: Coefficient -> TensorValue -> TensorValue
 scaleDimensionedValue c (TensorValue dims e) = do
   let constant = tensorValue $ constantDimensionedValue dims c
   let e' = runSilentLogger $ evalMulRatTensor $ TensorOp2Args dims constant e
   TensorValue dims e'
 
-addDimensionedConstants :: (HasRatTensors builtin) => AddConstants (DimensionedTensorValue builtin)
+addDimensionedConstants :: AddConstants TensorValue
 addDimensionedConstants c1 c2 v1 v2 = do
   let cv1 = scaleConstant c1 v1
   let cv2 = scaleConstant c2 v2
   addDimensionedValue cv1 cv2
 
-dimensionedValueToRatTensor :: (HasRatTensors builtin) => DimensionedTensorValue builtin -> Maybe RatTensor
+dimensionedValueToRatTensor :: TensorValue -> Maybe RatTensor
 dimensionedValueToRatTensor (TensorValue _ e1) = case e1 of
   IRatTensor t -> Just t
   _ -> Nothing
 
-minTensorValues :: (HasRatTensors builtin) => DimensionedTensorValue builtin -> DimensionedTensorValue builtin -> DimensionedTensorValue builtin
+minTensorValues :: TensorValue -> TensorValue -> TensorValue
 minTensorValues (TensorValue dims v1) (TensorValue _ v2) =
   TensorValue dims $
     runSilentLogger $
@@ -85,7 +81,7 @@ minTensorValues (TensorValue dims v1) (TensorValue _ v2) =
             tensorOp2Arg2 = v2
           }
 
-maxTensorValues :: (HasRatTensors builtin) => DimensionedTensorValue builtin -> DimensionedTensorValue builtin -> DimensionedTensorValue builtin
+maxTensorValues :: TensorValue -> TensorValue -> TensorValue
 maxTensorValues (TensorValue dims v1) (TensorValue _ v2) =
   TensorValue dims $
     runSilentLogger $
@@ -96,7 +92,7 @@ maxTensorValues (TensorValue dims v1) (TensorValue _ v2) =
             tensorOp2Arg2 = v2
           }
 
-stackTensorValues :: (HasRatTensors builtin) => [DimensionedTensorValue builtin] -> DimensionedTensorValue builtin
+stackTensorValues :: [TensorValue] -> TensorValue
 stackTensorValues = \case
   [] -> developerError "Cannot stack zero tensors"
   elements@(TensorValue dims _ : _) -> do
@@ -112,14 +108,14 @@ stackTensorValues = \case
               stackElements = fmap tensorValue elements
             }
 
-unstackTensorValues :: (HasRatTensors builtin) => DimensionedTensorValue builtin -> [DimensionedTensorValue builtin]
+unstackTensorValues :: TensorValue -> [TensorValue]
 unstackTensorValues (TensorValue dims value) = case dims of
   IDimCons (INatLiteral d) ds -> do
     let values = runSilentLogger $ etaReduceTensor IRatType d ds value
     fmap (TensorValue ds) values
   _ -> developerError "Cannot unstack tensor with unknown dimensions"
 
-instance (HasRatTensors builtin) => ConstantLike (DimensionedTensorValue builtin) where
+instance ConstantLike TensorValue where
   addConstants = addDimensionedConstants
   scaleConstant = scaleDimensionedValue
   toRatTensor = dimensionedValueToRatTensor
@@ -127,8 +123,3 @@ instance (HasRatTensors builtin) => ConstantLike (DimensionedTensorValue builtin
   maxConstants = maxTensorValues
   stackConstants = stackTensorValues
   unstackConstants = unstackTensorValues
-
-tensorLinearExprToExpr :: (HasRatTensors builtin) => VDims builtin -> TensorValueLinearExpr builtin -> Value builtin
-tensorLinearExprToExpr dims linexp = tensorValue $ linearExprToExpr id fromVar addDimensionedValue linexp
-  where
-    fromVar (v, c) = scaleDimensionedValue c (TensorValue dims (VBoundVar (toLv v) []))

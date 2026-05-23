@@ -38,6 +38,7 @@ import Vehicle.Compile.Normalise.NBE (evalBuiltin)
 import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Data.Builtin.Interface (Accessor (..), BuiltinHasIndexLiterals, BuiltinHasListLiterals, BuiltinHasNatLiterals, BuiltinHasNatType, BuiltinHasTensors)
 import Vehicle.Data.Builtin.Interface.Normalise (EvalSimple, HasTensorLiterals, MonadNormBuiltin, evalAddRatTensor, evalCompareRatTensorPointwise, evalConstTensor, evalMulRatTensor, unoptimisedEvalAtTensor)
+import Vehicle.Data.Builtin.Interface.Print
 import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Builtin.Standard.Normalise (foldReduceAndComparison)
 import Vehicle.Data.Code.Interface
@@ -283,8 +284,7 @@ data BoolTensorValue
   | VBoolTensorReduceAnd (TensorReductionArgs (Value Builtin))
   | VBoolTensorReduceOr (TensorReductionArgs (Value Builtin))
   | VBoolTensorQuantifyRat (Quantifier, QuantifyRatTensorArgs (Value Builtin) (Closure Builtin))
-  | VBoolTensorQuantifyRecord (Quantifier, QuantifyRecordArgs (Value Builtin) (Closure Builtin))
-  | VBoolTensorIf (IfArgs (Value Builtin))
+  | VBoolTensorBoolIf (IfArgs (Value Builtin))
   | VBoolTensorAt (AtTensorArgs (Value Builtin))
   | VBoolTensorForeach (ForeachTensorArgs (Value Builtin))
 
@@ -301,7 +301,6 @@ toBoolTensorValue expr = case expr of
   (getExpr accessCompareNat -> Just args) -> VBoolTensorCompareNat args
   (getExpr accessCompareIndex -> Just args) -> VBoolTensorCompareIndex args
   (getExpr accessQuantifyRatTensor -> Just args) -> VBoolTensorQuantifyRat args
-  (getExpr accessQuantifyRecord -> Just args) -> VBoolTensorQuantifyRecord args
   (getExpr accessReduceAnd -> Just args) ->
     case foldReduceAndComparison args of
       Nothing -> VBoolTensorReduceAnd args
@@ -309,7 +308,7 @@ toBoolTensorValue expr = case expr of
   (getExpr accessReduceOr -> Just args) -> VBoolTensorReduceOr args
   (getExpr accessAtTensor -> Just args) -> VBoolTensorAt args
   (getExpr accessForeachTensor -> Just args) -> VBoolTensorForeach args
-  (getExpr accessIf -> Just args) -> VBoolTensorIf args
+  (getExpr accessIf -> Just args) -> VBoolTensorBoolIf args
   _ -> developerError $ "ill-typed BoolTensor expression:" <+> prettyVerbose expr
 
 fromBoolTensorValue :: BoolTensorValue -> Value Builtin
@@ -325,10 +324,9 @@ fromBoolTensorValue = \case
   VBoolTensorCompareRatPointwise args -> mkExpr accessCompareRatTensorPointwise args
   VBoolTensorCompareRatReduced args -> mkExpr accessCompareRatTensorReduced args
   VBoolTensorQuantifyRat args -> mkExpr accessQuantifyRatTensor args
-  VBoolTensorQuantifyRecord args -> mkExpr accessQuantifyRecord args
   VBoolTensorReduceAnd args -> mkExpr accessReduceAnd args
   VBoolTensorReduceOr args -> mkExpr accessReduceOr args
-  VBoolTensorIf args -> mkExpr accessIf args
+  VBoolTensorBoolIf args -> mkExpr accessIf args
   VBoolTensorAt args -> mkExpr accessAtTensor args
   VBoolTensorForeach args -> mkExpr accessForeachTensor args
 
@@ -378,14 +376,14 @@ fromMultiDimBoolTensorValue = \case
 -------------------------------------------------------------------------------
 -- Record
 data RecordValue
-  = VRecordNetworkApp Identifier (NetworkAppArgs (Value Builtin))
+  = VRecordFreeVar Identifier (Spine Builtin)
   | VRecordBoundVar Lv
   | VRecordLiteral (VType Builtin) !(VRecordFields Builtin)
 
 toRecordValue :: (HasCallStack) => Value Builtin -> RecordValue
 toRecordValue expr = case expr of
   VBoundVar lv [] -> VRecordBoundVar lv
-  VFreeVar n (getExpr accessSpine -> Just networkArgs) -> VRecordNetworkApp n networkArgs
+  VFreeVar n spine -> VRecordFreeVar n spine
   VRecord typ fields -> VRecordLiteral typ fields
   _ -> developerError $ "ill-typed Record expression" <+> prettyVerbose expr
 
@@ -408,20 +406,18 @@ data RatTensorValue
   | VReduceMaxRatTensor (TensorReductionArgs (Value Builtin))
   | VIfRatTensor (IfArgs (Value Builtin))
   | VRatTensorBoundVar Lv
-  | VRatTensorNetworkApp Identifier (NetworkAppArgs (Value Builtin))
+  | VRatTensorFreeVar Identifier (Spine Builtin)
   | VRatConstTensor (ConstTensorArgs (Value Builtin))
   | VRatStackTensor (StackTensorArgs (Value Builtin))
   | VRatAt (AtTensorArgs (Value Builtin))
   | VRatForeach (ForeachTensorArgs (Value Builtin))
   | VRatRecordAcc !(VType Builtin) !(Value Builtin) !FieldName !(Spine Builtin)
-  | VDatasetOrParameter Identifier
 
 toRatTensorValue :: (HasCallStack) => Value Builtin -> RatTensorValue
 toRatTensorValue expr = case expr of
   VBoundVar lv [] -> VRatTensorBoundVar lv
+  VFreeVar n spine -> VRatTensorFreeVar n spine
   VRecordAcc typ value fieldName spine -> VRatRecordAcc typ value fieldName spine
-  VFreeVar n (getExpr accessSpine -> Just networkArgs) -> VRatTensorNetworkApp n networkArgs
-  VFreeVar n [] -> VDatasetOrParameter n
   (getExpr accessRatTensorLiteral -> Just t) -> VRatTensorLiteral t
   (getExpr accessNegRatTensor -> Just args) -> VNegRatTensor args
   (getExpr accessAddRatTensor -> Just args) -> VAddRatTensor args
@@ -446,6 +442,7 @@ toRatTensorValue expr = case expr of
 fromRatTensorValue :: RatTensorValue -> Value Builtin
 fromRatTensorValue = \case
   VRatTensorBoundVar v -> VBoundVar v []
+  VRatTensorFreeVar name args -> VFreeVar name args
   VRatRecordAcc typ value fieldName spine -> VRecordAcc typ value fieldName spine
   VRatTensorLiteral t -> mkExpr accessRatTensorLiteral t
   VNegRatTensor args -> mkExpr accessNegRatTensor args
@@ -464,8 +461,6 @@ fromRatTensorValue = \case
   VRatStackTensor args -> mkExpr accessStackTensor args
   VRatAt args -> mkExpr accessAtTensor args
   VRatForeach args -> mkExpr accessForeachTensor args
-  VDatasetOrParameter ident -> VFreeVar ident []
-  VRatTensorNetworkApp name args -> VFreeVar name (mkExpr accessSpine args)
 
 -------------------------------------------------------------------------------
 -- Dim
@@ -498,7 +493,7 @@ fromDimensionsValue e = case e of
 
 -- | Reduces a tensor value `x` to `[x!0, x!1, ..., x!n]`
 etaReduceTensor ::
-  (MonadNormBuiltin m, BuiltinHasNatLiterals builtin, BuiltinHasIndexLiterals builtin, BuiltinHasTensors builtin, HasTensorLiterals Value builtin, BuiltinHasListLiterals builtin, BuiltinHasNatType builtin) =>
+  (MonadNormBuiltin m, PrintableBuiltin builtin, BuiltinHasNatLiterals builtin, BuiltinHasIndexLiterals builtin, BuiltinHasTensors builtin, HasTensorLiterals Value builtin, BuiltinHasListLiterals builtin, BuiltinHasNatType builtin) =>
   VType builtin ->
   Int ->
   Value builtin ->

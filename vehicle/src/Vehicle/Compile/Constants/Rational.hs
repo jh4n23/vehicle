@@ -6,7 +6,6 @@ import Vehicle.Data.Assertion
 import Vehicle.Data.Bound (SliceBounds)
 import Vehicle.Data.Code.BooleanExpr
 import Vehicle.Data.Code.LinearExpr
-import Vehicle.Data.MaybeTrivial (MaybeTrivial (..))
 import Vehicle.Data.Tensor
 import Vehicle.Data.Variable.Bound.Level
 import Vehicle.Prelude
@@ -51,12 +50,3 @@ instance ConstantLike RatTensor where
 
   unstackConstants :: RatTensor -> [RatTensor]
   unstackConstants = unstack
-
-eliminateVarsInComparison ::
-  LinearSubstitution SliceVariable ->
-  LinearAssertion ->
-  MaybeTrivial LinearAssertion
-eliminateVarsInComparison f NormalisedRelation {..} =
-  case eliminateVars f expression of
-    Right newExpr -> NonTrivial $ NormalisedRelation {expression = newExpr, ..}
-    Left tensor -> Trivial (isRelated relation tensor (ConstantTensor (shapeOf tensor) 0))

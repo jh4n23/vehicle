@@ -1,7 +1,6 @@
 module Vehicle.Backend.Solver.UserVariableElimination.Core where
 
 import Control.Monad (forM)
-import Control.Monad.Except (MonadError)
 import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.State (MonadState (..))
 import Data.Char.SScript (subscript)
@@ -110,7 +109,7 @@ createNetworkVarName networkName application inputOrOutput =
 -- Monads
 
 type MonadPropertyStructure m =
-  ( MonadLogger m,
+  ( MonadCompile m,
     MonadFreeContext Builtin m,
     MonadReader PropertyMetaData m,
     MonadTensorBoundContext m,
@@ -119,12 +118,11 @@ type MonadPropertyStructure m =
 
 type MonadQueryStructure m =
   ( MonadPropertyStructure m,
-    MonadState GlobalCtx m,
-    MonadError CompileError m
+    MonadState GlobalCtx m
   )
 
 addNetworkApplicationToGlobalCtx ::
-  (MonadPropertyStructure m, MonadState GlobalCtx m) =>
+  (MonadQueryStructure m) =>
   Name ->
   NetworkContextInfo ->
   Value Builtin ->

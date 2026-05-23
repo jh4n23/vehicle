@@ -20,7 +20,7 @@ import Vehicle.Compile.Error
 import Vehicle.Compile.ExpandResources (expandResources)
 import Vehicle.Compile.ExpandResources.Core
 import Vehicle.Compile.LiftIf (unfoldIf)
-import Vehicle.Compile.LowerNot (lowerNot, negateRatTensorQuantifierBody)
+import Vehicle.Compile.LowerNot (lowerNot, negateQuantifierBody)
 import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Normalise.Quote
 import Vehicle.Compile.Prelude
@@ -94,7 +94,8 @@ compileToQueries queryFormat typedProg resources maybeVerificationFolder = do
   properties <- compileProg settings resourceFreeProg
 
   -- Check that there were actually properties in the specification.
-  when (null properties) $ throwError NoPropertiesFound
+  when (null properties) $ do
+    throwError NoPropertiesFound
 
   -- Write out the folder
   case maybeVerificationFolder of
@@ -118,7 +119,7 @@ compileProg ::
   CompilationSettings ->
   Prog Builtin ->
   m [(Name, MultiProperty PropertyAddress)]
-compileProg settings (Main decls) =
+compileProg settings (Main decls) = do
   runFreshFreeContextT (Proxy @Builtin) $
     runSupplyT [(0 :: PropertyID) ..] $
       compileDecls settings decls
@@ -202,7 +203,7 @@ compileSingleProperty CompilationSettings {..} prov propertyAddress expr =
 -- Assumptions - expression is well-typed in the empty context and of type Bool.
 compileQueries ::
   forall m.
-  (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m, MonadError CompileError m) =>
+  (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m, MonadFreeContext Builtin m) =>
   Value Builtin ->
   m (Property QueryMetaData)
 compileQueries expr = do
@@ -260,7 +261,7 @@ compileQueries expr = do
     unblock = unblockBoolExpr topLevelUnblockingActions
 
 compileQuantifiedQuerySet ::
-  (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m, MonadError CompileError m) =>
+  (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m) =>
   Bool ->
   QuantifyRatTensorArgs (Value Builtin) (Closure Builtin) ->
   [CompilationStep] ->
@@ -287,7 +288,7 @@ wrapQuantifyRecord QuantifyRecordArgs {..} = do
   namedCtx <- getNameContext
   recordTypeIdent <- case toTypeValue quantifyRecordType of
     VFreeTypeVar v _spine -> pure v
-    _ -> developerError "Record binder is not of expected format."
+    _ -> compilerDeveloperError "Record binder is not of expected format."
 
   -- Construct \r -> body from binder and body in record quantifier args
   recordQLam <- unnormaliseInCtx $ VLam quantifyRecordBinder quantifyRecordBody
@@ -312,7 +313,7 @@ wrapQuantifyRecord QuantifyRecordArgs {..} = do
 
 -- | We only need this because we can't evaluate networks in the compiler.
 compileUnquantifiedQuerySet ::
-  (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m, MonadError CompileError m) =>
+  (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m) =>
   Value Builtin ->
   m (Property QueryMetaData)
 compileUnquantifiedQuerySet value = do
@@ -322,7 +323,7 @@ compileUnquantifiedQuerySet value = do
     compileQuerySetPartitions globalCtx False maybePartitions
 
 compileQuerySetPartitions ::
-  (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m, MonadError CompileError m) =>
+  (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m) =>
   GlobalCtx ->
   QuerySetNegationStatus ->
   MaybeTrivial Partitions ->
@@ -336,14 +337,12 @@ compileQuerySetPartitions globalCtx isPropertyNegated maybePartitions = case may
       Trivial b -> return $ Trivial b
       NonTrivial queries -> return $ NonTrivial $ Query $ QuerySet isPropertyNegated queries
 
-topLevelUnblockingActions :: (Monad m) => UnblockingActions m
+topLevelUnblockingActions :: (MonadCompile m) => UnblockingActions m
 topLevelUnblockingActions =
   UnblockingActions
-    { unblockRatTensorBoundVar = developerError "No bound variables should exist at top-level",
-      unblockRecordBoundVar = developerError "No bound variables should exist at top-level",
-      unblockNetworkApp = \_ _ _ -> developerError "Unblocking of constant network functions at top-level not yet supported",
-      unblockDatasetOrParameter = developerError "Should not be unblocking datasets or parameters"
-    }
+    (developerError "Should not be unblocking variables at top-level")
+    (developerError "Should not be unblocking variables at top-level")
+    (developerError "Unblocking of constant network functions at top-level not yet supported")
 
 handlePropertyCompileError ::
   (MonadIO m, MonadCompile m) =>
