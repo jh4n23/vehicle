@@ -2,6 +2,7 @@ module Vehicle.Data.AST.Record where
 
 import Control.DeepSeq (NFData)
 import Data.Aeson (ToJSON)
+import Data.Aeson.Types (FromJSON)
 import Data.Foldable (traverse_)
 import Data.Hashable (Hashable)
 import Data.Map.Ordered (OMap)
@@ -33,7 +34,7 @@ instance Hashable FieldName
 
 instance ToJSON FieldName
 
--- instance FromJSON FieldName
+instance FromJSON FieldName
 
 instance Pretty FieldName where
   pretty (FieldName _ name) = pretty name

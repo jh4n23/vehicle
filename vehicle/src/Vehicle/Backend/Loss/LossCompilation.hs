@@ -65,8 +65,8 @@ convertType typ = logConversion typ $ case toTypeValue typ of
   VListType tElem -> IListType <$> convertType tElem
   VVectorType {} -> unsupportedOperation "VectorType"
   VBoolTensorType ds -> ITensorType <$> convertBoolType <*> convertDims ds
-  VRatTensorType ds -> ITensorType IRatType <$> convertDims ds
-  VRecordType {} -> developerError "Records in loss functions are not supported yet"
+  VTensorLike (VRatTensorType ds) -> ITensorType IRatType <$> convertDims ds
+  VTensorLike _ -> undefined -- TODO: record implementation
   VNatTensorType ds -> ITensorType INatType <$> convertDims ds
   VIndexTensorType n ds -> (ITensorType . IIndexType <$> convertDim n) <*> convertDims ds
 
@@ -289,8 +289,7 @@ convertRatTensor value = logConversion value $ case toRatTensorValue value of
   VRatStackTensor args -> convertStackTensor convertRatTensor args
   VRatAt args -> convertAtTensor convertRatTensor args
   VRatForeach args -> convertForeachTensor convertRatTensor args
-  VRatRecordAcc {} -> developerError "Record accesses in loss functions are not supported yet"
-
+  VRatRecordAcc {} -> developerError "record accesses in loss functions not supported yet"
 --------------------------------------------------------------------------------
 -- Vector
 

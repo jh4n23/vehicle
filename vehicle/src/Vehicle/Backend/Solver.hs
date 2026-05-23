@@ -21,21 +21,16 @@ import Vehicle.Compile.ExpandResources (expandResources)
 import Vehicle.Compile.ExpandResources.Core
 import Vehicle.Compile.LiftIf (unfoldIf)
 import Vehicle.Compile.LowerNot (lowerNot, negateQuantifierBody)
-import Vehicle.Compile.Normalise.NBE
-import Vehicle.Compile.Normalise.Quote
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyFriendly, prettyFriendlyEmptyCtx)
 import Vehicle.Compile.Print.Warning ()
 import Vehicle.Compile.Property (traverseMultiProperty)
 import Vehicle.Compile.Unblock (UnblockingActions (..), unblockBoolExpr)
 import Vehicle.Data.Builtin.Standard
-import Vehicle.Data.Builtin.Standard.Scoping (constructFromTensorFreeVar, constructTensorisableDims)
 import Vehicle.Data.Code.BooleanExpr
-import Vehicle.Data.Code.DSL
 import Vehicle.Data.Code.Interface
 import Vehicle.Data.Code.TypedView
 import Vehicle.Data.Code.Value
-import Vehicle.Data.DSL
 import Vehicle.Data.MaybeTrivial (MaybeTrivial (..), andTrivial, orTrivial)
 import Vehicle.Data.Variable.Bound.Context.Name
 import Vehicle.Data.Variable.Bound.Context.Tensor
@@ -271,47 +266,73 @@ compileQuantifiedQuerySet isPropertyNegated args prevSteps =
     (maybePartitions, globalCtx) <- runStateT (eliminateExists args prevSteps) emptyGlobalCtx
     compileQuerySetPartitions globalCtx isPropertyNegated maybePartitions
 
--- | Takes a record quantifier and wraps the binder & body in a tensor quantifier
---  e.g. given Pair has fields { a : Real, b : Real }
---  forall (r : Pair) . (body)
---  becomes
---  forall (_t0 : tensor Real [2]) . (body (_PairFromTensor _t0))
+  -- let step = SolveInequalities (toSliceVar var) bounds
+  -- let newCompilationTrace = step : steps
+  -- logInequalitiesSolved var step remainingTree
+  -- return $ fmap (newCompilationTrace,) updatedTree
+
+getFreshTensorBinderName ::
+  NamedBoundCtx ->
+  Text.Text
+getFreshTensorBinderName ctx = checkExistsInCtx 0
+  where
+    checkExistsInCtx :: Int -> Text.Text
+    checkExistsInCtx n =
+      let name = "_t" <> Text.pack (show n)
+      in if Just name `elem` ctx
+        then checkExistsInCtx (n + 1)
+        else "_t" <> Text.pack (show n)
+
 wrapQuantifyRecord ::
-  ( MonadPropertyStructure m,
-    MonadSupply QueryID m,
-    MonadStdIO m,
-    MonadFreeContext Builtin m
-  ) =>
+  (MonadPropertyStructure m,
+  MonadSupply QueryID m,
+  MonadStdIO m,
+  MonadFreeContext Builtin m) =>
   QuantifyRecordArgs (Value Builtin) (Closure Builtin) ->
-  m (QuantifyRatTensorArgs (Value Builtin) (Closure Builtin))
-wrapQuantifyRecord QuantifyRecordArgs {..} = do
-  namedCtx <- getNameContext
+  m (QuantifyRatTensorArgs (Value Builtin) (Closure Builtin), CompilationStep)
+wrapQuantifyRecord QuantifyRecordArgs{..} = do
+
   recordTypeIdent <- case toTypeValue quantifyRecordType of
     VFreeTypeVar v _spine -> pure v
-    _ -> compilerDeveloperError "Record binder is not of expected format."
+    _ -> compilerDeveloperError "record binder is not of expected format."
 
-  -- Construct \r -> body from binder and body in record quantifier args
-  recordQLam <- unnormaliseInCtx $ VLam quantifyRecordBinder quantifyRecordBody
-  fields <- getRecordFields recordTypeIdent
-  let shape = constructTensorisableDims fields
-  let dims = mkDims shape
+  let recordQuantifierLam = VLam quantifyRecordBinder quantifyRecordBody 
+  unnormalisedQuantifierLam <- unnormaliseInCtx recordQuantifierLam
 
-  -- Build tensor binder with appropriate dims and type for record
+  recordTypeDecl <- getDeclEntry (Proxy @Builtin) recordTypeIdent
+  dims <- getRecordDimsExpr recordTypeDecl
+
+  let tensorType = fromDSL mempty $ tTensor tRat (toDSL dims)
   let Closure boundEnv _body = quantifyRecordBody
-  tensorType <- eval namedCtx boundEnv $ fromDSL mempty $ tTensor tRat (toDSL dims)
+
+  namedCtx <- getNameContext
+  normalisedTensorType <- eval namedCtx boundEnv tensorType
   normalisedDims <- eval namedCtx boundEnv dims
-  let tensorBinder = mkExplicitBinder tensorType (Just (mempty, getFreshTensorBinderName namedCtx))
+  let tensorBinderName = getFreshTensorBinderName namedCtx
 
-  let tensorBoundVar = explicit $ BoundVar mempty 0
-  recordTypeProv <- getRecordProvenance recordTypeIdent
-  -- Construct _PairFromTensor _t0
-  let fromTensorExpr = App (constructFromTensorFreeVar recordTypeIdent recordTypeProv) [tensorBoundVar]
+  let tensorBinder = Binder { 
+    binderDisplayForm = BinderDisplayForm (NameAndType tensorBinderName mempty) True,
+    binderVisibility = Explicit,
+    binderRelevance = Relevant,
+    binderValue = normalisedTensorType
+    }
 
-  -- Construct body (_PairFromTensor _t0)
-  let nestedBody = App recordQLam [Arg Explicit Relevant fromTensorExpr]
-  return $ QuantifyRatTensorArgs normalisedDims tensorBinder (Closure boundEnv nestedBody)
+  let tensorBoundVar = Arg Explicit Relevant (BoundVar mempty 0)
+  recordTypeProv <- getRecordProvenance recordTypeDecl
+  let appliedFromTensor = App (constructFromTensorFreeVar recordTypeIdent recordTypeProv) [tensorBoundVar]
 
--- | We only need this because we can't evaluate networks in the compiler.
+  let appliedFromTensorArg = Arg Explicit Relevant appliedFromTensor
+  let nestedRecordQuantifier = App unnormalisedQuantifierLam [appliedFromTensorArg]
+  let nestedRecordQuantifierClosure = Closure boundEnv nestedRecordQuantifier
+
+  let ratTensorArgs = QuantifyRatTensorArgs normalisedDims tensorBinder nestedRecordQuantifierClosure
+
+  -- make compilationStep
+  let name = fromMaybe (developerError "Quantified variable binder should have name") (nameOf quantifyRecordBinder)
+  fields <- getRecordFieldNames recordTypeDecl
+
+  return (ratTensorArgs, ConvertQuantifiedTensorLike tensorBinderName name fields)
+
 compileUnquantifiedQuerySet ::
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m) =>
   Value Builtin ->

@@ -104,23 +104,17 @@
                   "f",
                   {
                     "networkType": {
-                      "networkOutputType": {
-                        "tag": "TensorIOType",
-                        "contents": {
-                          "dimensions": [
-                            2
-                          ],
-                          "baseType": []
-                        }
+                      "outputTensor": {
+                        "dimensions": [
+                          2
+                        ],
+                        "baseType": []
                       },
-                      "networkInputType": {
-                        "tag": "TensorIOType",
-                        "contents": {
-                          "dimensions": [
-                            2
-                          ],
-                          "baseType": []
-                        }
+                      "inputTensor": {
+                        "dimensions": [
+                          2
+                        ],
+                        "baseType": []
                       }
                     },
                     "networkFilepath": "fake.onnx"

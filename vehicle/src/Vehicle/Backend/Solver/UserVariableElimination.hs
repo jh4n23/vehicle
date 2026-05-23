@@ -22,13 +22,11 @@ import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Compile.Rational.LinearExpr (LinearityError (..), compileLinearAssertion)
-import Vehicle.Compile.Resource
 import Vehicle.Compile.Unblock (UnblockingActions (..))
 import Vehicle.Compile.Unblock qualified as Unblocking
 import Vehicle.Compile.Variable (createUserVar)
 import Vehicle.Data.Builtin.Interface.Normalise (evalAtTensor, unoptimisedEvalReduceAndTensor)
 import Vehicle.Data.Builtin.Standard
-import Vehicle.Data.Builtin.Standard.Scoping (constructFromTensorFreeVar, constructToTensorFreeVar)
 import Vehicle.Data.Code.Interface
 import Vehicle.Data.Code.TypedView
 import Vehicle.Data.Code.Value
@@ -36,7 +34,6 @@ import Vehicle.Data.MaybeTrivial
 import Vehicle.Data.Variable.Bound.Context.Name (getNameContext, prettyFriendlyInCtx)
 import Vehicle.Data.Variable.Bound.Context.Tensor (replaceTensorVariableWithStackedChildren)
 import Vehicle.Data.Variable.Bound.Level
-import Vehicle.Verify.Core
 import Vehicle.Verify.QueryFormat (QueryFormat (..), supportsStrictInequalities)
 import Prelude hiding (Applicative (..))
 import Vehicle.Verify.Core 
@@ -127,9 +124,8 @@ compileBoolExpr expr = do
     VBoolIf args -> compileBoolExpr =<< unfoldIf args
     VAnd (TensorOp2Args _dims x y) -> andTrivial andPartitions <$> compileBoolExpr x <*> compileBoolExpr y
     VOr (TensorOp2Args _dims x y) -> orTrivial orPartitions <$> compileBoolExpr x <*> compileBoolExpr y
-    VQuantifyRatTensor (Exists, args) -> eliminateExists args
-    -- TODO: RECORD SUPPORT
-    VQuantifyRecord (Exists, _args) -> compilerDeveloperError "Non top-level record quantifiers are not supported yet"
+    VQuantifyRatTensor (Exists, args) -> eliminateExists args []
+    VQuantifyRecord (Exists, _args) -> compilerDeveloperError "LAUREN TODO: quantifyRecord case in compileBoolExpr"
     VCompareNat {} -> unblockAndRec expr
     VCompareIndex {} -> unblockAndRec expr
     VReduceAndTensor {} -> unblockAndRec expr
@@ -220,53 +216,56 @@ unblockNetworkApplication ::
 unblockNetworkApplication unblockFnTensor unblockFnRecord ident (NetworkAppArgs arg) = do
   let name = nameOf ident
   networkInfo <- asks (lookupNetworkInfo name . networkCtx)
-  let typ = networkType networkInfo
 
-  -- The low-level network representation works over tensors
-  -- Create two tensors representing the network input and output
+  let typ = networkType networkInfo
   (inputVarExpr, outputVarExpr) <- addNetworkApplicationToGlobalCtx name networkInfo arg
   ctx <- getNameContext
 
-  -- If our network outputs a tensorisable, convert our output expression to a record
-  transformedOutputVarExpr <- case networkOutputType typ of
-    RecordIOType (NetworkRecordType _ recordTyp _ _) -> do
+  transformedInput <- case inputTensor typ of 
+    NetworkRecordType  _ recordTyp _ _ -> do 
       fromTensorFn <- eval ctx emptyBoundEnv (constructFromTensorFreeVar recordTyp mempty)
-      evalApp ctx fromTensorFn [explicit outputVarExpr]
+      evalApp ctx fromTensorFn [Arg Explicit Relevant inputVarExpr]
+    _ -> return inputVarExpr
+
+  transformedOutput <- case outputTensor typ of 
+    NetworkRecordType _ recordTyp _ _ -> do 
+      fromTensorValue <- eval ctx emptyBoundEnv (constructFromTensorFreeVar recordTyp mempty)
+      evalApp ctx fromTensorValue [Arg Explicit Relevant outputVarExpr]
     _ -> return outputVarExpr
 
-  -- Create our input equality in terms of tensors (as record equality just converts to tensor equality anyway)
-  -- If our network input is a tensorisable, i.e. arg is tensorisable, convert it to a tensor
-  transformedArg <- case networkInputType typ of
-    RecordIOType (NetworkRecordType _ recordTyp _ _) -> do
+  inputEquality <- case inputTensor typ of 
+    NetworkRecordType _ recordTyp _ _ -> do
       toTensorFn <- eval ctx emptyBoundEnv (constructToTensorFreeVar recordTyp mempty)
-      evalApp ctx toTensorFn [explicit arg]
-    _ -> return arg
+      argAsTensor <- evalApp ctx toTensorFn [Arg Explicit Relevant arg]
+      inputAsTensor <- evalApp ctx toTensorFn [Arg Explicit Relevant transformedInput]
+      return $ fromBoolValue $ VCompareRatTensor ( Eq, TensorOp2Args
+                  { tensorOp2Dims = mkDims (inputShape networkInfo),
+                    tensorOp2Arg1 = inputAsTensor,
+                    tensorOp2Arg2 = argAsTensor
+                  }
+              )
 
-  let inputEquality =
-        fromBoolValue $
-          VCompareRatTensor
-            ( Eq,
-              TensorOp2Args
-                { tensorOp2Dims = mkDims (inputShape networkInfo),
-                  tensorOp2Arg1 = inputVarExpr,
-                  tensorOp2Arg2 = transformedArg
-                }
-            )
+    _ -> return $ fromBoolValue $ VCompareRatTensor ( Eq,TensorOp2Args
+                  { tensorOp2Dims = mkDims (inputShape networkInfo),
+                    tensorOp2Arg1 = transformedInput,
+                    tensorOp2Arg2 = arg
+                  }
+              )
 
   tell [inputEquality]
 
   logDebugM MaxDetail $ do
     inputEqualityDoc <- prettyFriendlyInCtx inputEquality
-    replacementExprDoc <- prettyFriendlyInCtx transformedOutputVarExpr
+    replacementExprDoc <- prettyFriendlyInCtx transformedOutput
     return $
       "note-input-equality" <+> inputEqualityDoc
         <> line
         <> "replace-expr" <+> replacementExprDoc
 
-  case networkOutputType typ of
-    -- Unblock depending on the type of the output expression from our network
-    RecordIOType (NetworkRecordType {}) -> unblockFnRecord transformedOutputVarExpr
-    TensorIOType (NetworkTensorType {}) -> unblockFnTensor transformedOutputVarExpr
+  case outputTensor typ of 
+    NetworkRecordType {} -> unblockFnRecord transformedOutput
+    _ -> unblockFnTensor transformedOutput
+
 
 --------------------------------------------------------------------------------
 -- Elimination operations

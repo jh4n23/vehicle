@@ -159,7 +159,7 @@ handleUnusedDecl ::
   m [Decl builtin]
 handleUnusedDecl decl isRootDecl = do
   logDebug MaxDetail $ "No applications of declaration" <+> quotePretty (identifierOf decl) <+> "found."
-  if isRootDecl && not (isInstanceDecl decl || isProjectionDecl decl)
+  if isRootDecl
     then do
       -- Work out if the unused declaration needs to be monomorphised
       let fakeArgs = explicit (Hole mempty "fakeArg") : fakeArgs
