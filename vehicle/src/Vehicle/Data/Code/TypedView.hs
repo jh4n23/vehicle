@@ -28,9 +28,8 @@ module Vehicle.Data.Code.TypedView
     etaReduceTensor,
     scaleValue,
     addValues,
-    TensorLikeValue (..),
     toRecordValue,
-    RecordValue(..)
+    RecordValue (..),
   )
 where
 
@@ -39,6 +38,7 @@ import Vehicle.Compile.Normalise.NBE (evalBuiltin)
 import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Data.Builtin.Interface (Accessor (..), BuiltinHasIndexLiterals, BuiltinHasListLiterals, BuiltinHasNatLiterals, BuiltinHasNatType, BuiltinHasTensors)
 import Vehicle.Data.Builtin.Interface.Normalise (EvalSimple, HasTensorLiterals, MonadNormBuiltin, evalAddRatTensor, evalCompareRatTensorPointwise, evalConstTensor, evalMulRatTensor, unoptimisedEvalAtTensor)
+import Vehicle.Data.Builtin.Interface.Print
 import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Builtin.Standard.Normalise (foldReduceAndComparison)
 import Vehicle.Data.Code.Interface
@@ -64,7 +64,8 @@ data TypeValue
   | VRatType
   | VBoolTensorType (VDims Builtin)
   | VNatTensorType (VDims Builtin)
-  | VTensorLike TensorLikeValue
+  | VRatTensorType (VDims Builtin)
+  | VRecordType (VType Builtin) !(VRecordFields Builtin)
   | VIndexTensorType (Value Builtin) (Value Builtin)
   | VListType (Value Builtin)
   | VVectorType (Value Builtin) (Value Builtin)
@@ -81,7 +82,7 @@ toTypeValue t = case t of
   VPi binder value -> VPiType binder value
   VBoundVar lv spine -> VBoundTypeVar lv spine
   VFreeVar v spine -> VFreeTypeVar v spine
-  VRecord recordType fields -> VTensorLike (VRecordType recordType fields)
+  VRecord recordType fields -> VRecordType recordType fields
   VBuiltin (BuiltinType typ) spine -> case (typ, spine) of
     (UnitType, []) -> VUnitType
     (BoolType, []) -> VBoolType
@@ -115,7 +116,7 @@ fromTypeValue t = case t of
   VNatTensorType ds -> ITensorType (fromTypeValue VNatType) ds
   VIndexTensorType n ds -> ITensorType (fromTypeValue (VIndexType n)) ds
   VVectorType tElem d -> IVectorType tElem d
-  VTensorLike (VRecordType _recordType _fields) -> undefined
+  VRecordType _recordType _fields -> undefined
 
 -------------------------------------------------------------------------------
 -- Index
@@ -383,7 +384,7 @@ toRecordValue :: (HasCallStack) => Value Builtin -> RecordValue
 toRecordValue expr = case expr of
   VBoundVar lv [] -> VRecordBoundVar lv
   VFreeVar n spine -> VRecordFreeVar n spine
-  VRecord typ fields-> VRecordLiteral typ fields
+  VRecord typ fields -> VRecordLiteral typ fields
   _ -> developerError $ "ill-typed Record expression" <+> prettyVerbose expr
 
 -------------------------------------------------------------------------------

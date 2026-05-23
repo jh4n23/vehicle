@@ -13,7 +13,7 @@ module Vehicle.Data.AST.Provenance
 where
 
 import Control.DeepSeq (NFData (..))
-import Data.Aeson.Types (FromJSON (..), KeyValue ((.=)), Options (..), Parser, ToJSON (..), defaultOptions, genericToJSON, object, withObject, (.:))
+import Data.Aeson.Types (KeyValue ((.=)), Options (..), ToJSON (..), defaultOptions, genericToJSON, object)
 import Data.Hashable (Hashable (..))
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty

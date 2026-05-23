@@ -5,7 +5,7 @@ module Vehicle.Compile.Unblock
     UnblockingActions (..),
     MonadPurify,
     unblockRatTensorValue,
-    DimensionsStatus (..)
+    DimensionsStatus (..),
   )
 where
 
@@ -185,14 +185,14 @@ unblockBoolMultiDimTensorValue actions expr = do
     unblock = unblockBoolMultiDimTensorValue actions
 
 unblockRecordValue :: UnblockingActions m -> DimensionsStatus -> UnblockingFunction m
-unblockRecordValue actions@UnblockingActions{..} status expr = do
+unblockRecordValue actions@UnblockingActions {..} status expr = do
   showEntry expr
   showExit =<< case toRecordValue expr of
     VRecordFreeVar n spine -> case getExpr accessSpine spine of
       Just args -> do
         unblockNetworkApp (unblockTensor status) (unblockRecord status) n args
       _ -> return expr
-    VRecordBoundVar {} -> return expr
+    VRecordBoundVar v -> unblockRecordBoundVar v
     VRecordLiteral {} -> return expr
   where
     unblockTensor = unblockRatTensorValue actions
@@ -229,7 +229,7 @@ unblockRatTensorValue actions@UnblockingActions {..} status expr = do
     VRatStackTensor args -> unblockStackTensor (unblock DifferentDimensions) args
     VRatAt args -> unblockAtTensor (unblock DifferentDimensions) args
     VRatForeach args -> unblockForeachTensor args
-    VRatRecordAcc _ value fieldName _ -> unblockRecordAcc (unblock status) value fieldName actions status
+    VRatRecordAcc typ value fieldName _ -> unblockRecordAcc (unblock status) typ value fieldName actions status
   where
     unblock = unblockRatTensorValue actions
 
@@ -241,7 +241,7 @@ unblockDimensionsValue expr = case toDimensionsValue expr of
   VDimsBoundVar {} -> unexpectedExprError currentPass (prettyVerbose expr)
 
 unblockIndexValue :: UnblockingFunction m
-unblockIndexValue expr = do 
+unblockIndexValue expr = do
   case toIndexValue expr of
     VIndexLiteral {} -> return expr
     VIndexIf {} -> return expr
@@ -354,21 +354,20 @@ unblockAtTensor unblock (AtTensorArgs tElem d ds xs i) = do
       nameCtx <- getNameContext
       evalAtTensor nameCtx evalApp eval $ AtTensorArgs tElem d ds xs'' i''
 
-
 unblockRecordAcc ::
   (MonadUnblock m) =>
   UnblockingFunction m ->
+  VType Builtin ->
   Value Builtin ->
   FieldName ->
   UnblockingActions m ->
-   DimensionsStatus ->
+  DimensionsStatus ->
   m (Value Builtin)
-unblockRecordAcc unblock value fieldName actions status = do
+unblockRecordAcc unblock typ value fieldName actions status = do
   value' <- unblockRecordValue actions status value
   liftIf value' $ \value'' -> do
-    res <- evalRecordAcc value'' fieldName
+    res <- evalRecordAcc typ value'' fieldName
     unblock res
-
 
 unblockForeachTensor ::
   (MonadUnblock m) =>
