@@ -2,6 +2,12 @@
 
 ## Next release
 
+### General
+
+* Improved language documentation to show per-backend support.
+
+* Added undocumented operations to language documentation.
+
 ### Loss backend
 
 * Fixed a bug where the compiler was erroring on some uses of `forall` for indices.
