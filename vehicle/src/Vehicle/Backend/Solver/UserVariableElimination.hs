@@ -39,6 +39,8 @@ import Vehicle.Data.Variable.Bound.Level
 import Vehicle.Verify.Core
 import Vehicle.Verify.QueryFormat (QueryFormat (..), supportsStrictInequalities)
 import Prelude hiding (Applicative (..))
+import Vehicle.Verify.Specification (CompilationStep)
+import qualified Data.Map as Map
 
 eliminateExists ::
   (MonadQueryStructure m) =>

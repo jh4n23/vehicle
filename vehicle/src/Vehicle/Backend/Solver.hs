@@ -9,7 +9,7 @@ import Control.Monad.IO.Class (MonadIO (..))
 import Control.Monad.Reader (MonadReader (..), ReaderT (..))
 import Control.Monad.State (StateT (..))
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe (maybeToList)
+import Data.Maybe (maybeToList, fromMaybe)
 import Data.Proxy (Proxy (..))
 import System.Directory (createDirectoryIfMissing)
 import Vehicle.Backend.Solver.QueryCompilation (compilePartitionsToQueries)
@@ -275,7 +275,7 @@ wrapQuantifyRecord ::
     MonadFreeContext Builtin m
   ) =>
   QuantifyRecordArgs (Value Builtin) (Closure Builtin) ->
-  m (QuantifyRatTensorArgs (Value Builtin) (Closure Builtin))
+  m (QuantifyRatTensorArgs (Value Builtin) (Closure Builtin), CompilationStep)
 wrapQuantifyRecord QuantifyRecordArgs {..} = do
   namedCtx <- getNameContext
   recordTypeIdent <- case toTypeValue quantifyRecordType of
@@ -292,7 +292,8 @@ wrapQuantifyRecord QuantifyRecordArgs {..} = do
   let Closure boundEnv _body = quantifyRecordBody
   tensorType <- eval namedCtx boundEnv $ fromDSL mempty $ tTensor tRat (toDSL dims)
   normalisedDims <- eval namedCtx boundEnv dims
-  let tensorBinder = mkExplicitBinder tensorType (Just (mempty, getFreshTensorBinderName namedCtx))
+  let tensorBinderName = getFreshTensorBinderName namedCtx
+  let tensorBinder = mkExplicitBinder tensorType (Just (mempty, tensorBinderName))
 
   let tensorBoundVar = explicit $ BoundVar mempty 0
   recordTypeProv <- getRecordProvenance recordTypeIdent
@@ -301,7 +302,11 @@ wrapQuantifyRecord QuantifyRecordArgs {..} = do
 
   -- Construct body (_PairFromTensor _t0)
   let nestedBody = App recordQLam [Arg Explicit Relevant fromTensorExpr]
-  return $ QuantifyRatTensorArgs normalisedDims tensorBinder (Closure boundEnv nestedBody)
+  let ratTensorArgs = QuantifyRatTensorArgs normalisedDims tensorBinder (Closure boundEnv nestedBody)
+
+  fieldNames <- getRecordFieldNames recordTypeIdent
+  let name = fromMaybe (developerError "Quantified variable binder should have name") (nameOf quantifyRecordBinder)
+  return (ratTensorArgs, ConvertQuantifiedTensorLike tensorBinderName name fieldNames)
 
 -- | We only need this because we can't evaluate networks in the compiler.
 compileUnquantifiedQuerySet ::

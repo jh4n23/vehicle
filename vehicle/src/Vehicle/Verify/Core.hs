@@ -177,7 +177,7 @@ flipQueryRel = \case
 data UserVariableAssignmentType 
   = TensorAssignment (Name, RatTensor)
   -- Attempting to cheat recordfields here
-  | RecordAssignment (Name, [(FieldName, RatTensor)])
+  | RecordAssignment (Name, [(Name, RatTensor)])
   deriving (Show, Generic, Eq)
 
 instance Pretty UserVariableAssignmentType where
