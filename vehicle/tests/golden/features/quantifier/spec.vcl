@@ -25,4 +25,4 @@ p = (forall x . minBound <= x <= add => (f x).a >= x.a)
 
 @property
 parallel : Bool
-parallel = (forall x . minBound <= x <= maxBound => (f x).a >= 0) and (exists y . minBound <= y <= maxBound and (f y).b >= 5)
+parallel = (forall x . 0 < x < 1 => f x >= 0) and (exists y . 0 < y < 1 and f y >= 5)

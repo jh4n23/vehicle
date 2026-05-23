@@ -28,9 +28,8 @@ module Vehicle.Data.Code.TypedView
     etaReduceTensor,
     scaleValue,
     addValues,
-    TensorLikeValue (..),
     toRecordValue,
-    RecordValue(..)
+    RecordValue (..),
   )
 where
 
@@ -39,6 +38,7 @@ import Vehicle.Compile.Normalise.NBE (evalBuiltin)
 import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Data.Builtin.Interface (Accessor (..), BuiltinHasIndexLiterals, BuiltinHasListLiterals, BuiltinHasNatLiterals, BuiltinHasNatType, BuiltinHasTensors)
 import Vehicle.Data.Builtin.Interface.Normalise (EvalSimple, HasTensorLiterals, MonadNormBuiltin, evalAddRatTensor, evalCompareRatTensorPointwise, evalConstTensor, evalMulRatTensor, unoptimisedEvalAtTensor)
+import Vehicle.Data.Builtin.Interface.Print
 import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Builtin.Standard.Normalise (foldReduceAndComparison)
 import Vehicle.Data.Code.Interface
@@ -50,7 +50,6 @@ import Vehicle.Data.Variable.Bound.Level
 import Vehicle.Data.Variable.Free.Context (MonadFreeContext)
 import Vehicle.Prelude
 import Vehicle.Prelude.Logging
-import Vehicle.Data.Builtin.Interface.Print
 
 -------------------------------------------------------------------------------
 -- Types
@@ -64,7 +63,8 @@ data TypeValue
   | VRatType
   | VBoolTensorType (VDims Builtin)
   | VNatTensorType (VDims Builtin)
-  | VTensorLike TensorLikeValue
+  | VRatTensorType (VDims Builtin)
+  | VRecordType (VType Builtin) !(VRecordFields Builtin)
   | VIndexTensorType (Value Builtin) (Value Builtin)
   | VListType (Value Builtin)
   | VVectorType (Value Builtin) (Value Builtin)
@@ -72,16 +72,12 @@ data TypeValue
   | VBoundTypeVar Lv (Spine Builtin)
   | VFreeTypeVar Identifier (Spine Builtin)
 
-data TensorLikeValue
-  = VRatTensorType (VDims Builtin)
-  | VRecordType (VType Builtin) !(VRecordFields Builtin)
-
 toTypeValue :: (HasCallStack) => Value Builtin -> TypeValue
 toTypeValue t = case t of
   VPi binder value -> VPiType binder value
   VBoundVar lv spine -> VBoundTypeVar lv spine
   VFreeVar v spine -> VFreeTypeVar v spine
-  VRecord recordType fields -> VTensorLike (VRecordType recordType fields)
+  VRecord recordType fields -> VRecordType recordType fields
   VBuiltin (BuiltinType typ) spine -> case (typ, spine) of
     (UnitType, []) -> VUnitType
     (BoolType, []) -> VBoolType
@@ -90,7 +86,7 @@ toTypeValue t = case t of
     (NatType, []) -> VNatType
     (ListType, [tElem]) -> VListType (argExpr tElem)
     (TensorType, [toTypeValue . argExpr -> VBoolType, ds]) -> VBoolTensorType (argExpr ds)
-    (TensorType, [toTypeValue . argExpr -> VRatType, ds]) -> VTensorLike (VRatTensorType (argExpr ds))
+    (TensorType, [toTypeValue . argExpr -> VRatType, ds]) -> VRatTensorType (argExpr ds)
     (TensorType, [toTypeValue . argExpr -> VNatType, ds]) -> VNatTensorType (argExpr ds)
     (TensorType, [toTypeValue . argExpr -> VIndexType n, ds]) -> VIndexTensorType n (argExpr ds)
     (VectorType, [tElem, dim]) -> VVectorType (argExpr tElem) (argExpr dim)
@@ -111,11 +107,11 @@ fromTypeValue t = case t of
   VNatType -> INatType
   VListType tElem -> IListType tElem
   VBoolTensorType ds -> ITensorType (fromTypeValue VBoolType) ds
-  VTensorLike (VRatTensorType ds) -> ITensorType (fromTypeValue VRatType) ds
+  VRatTensorType ds -> ITensorType (fromTypeValue VRatType) ds
   VNatTensorType ds -> ITensorType (fromTypeValue VNatType) ds
   VIndexTensorType n ds -> ITensorType (fromTypeValue (VIndexType n)) ds
   VVectorType tElem d -> IVectorType tElem d
-  VTensorLike (VRecordType _recordType _fields) -> undefined
+  VRecordType _recordType _fields -> undefined
 
 -------------------------------------------------------------------------------
 -- Index
@@ -383,7 +379,7 @@ toRecordValue :: (HasCallStack) => Value Builtin -> RecordValue
 toRecordValue expr = case expr of
   VBoundVar lv [] -> VRecordBoundVar lv
   VFreeVar n spine -> VRecordFreeVar n spine
-  VRecord typ fields-> VRecordLiteral typ fields
+  VRecord typ fields -> VRecordLiteral typ fields
   _ -> developerError $ "ill-typed Record expression" <+> prettyVerbose expr
 
 -------------------------------------------------------------------------------
