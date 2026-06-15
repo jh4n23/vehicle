@@ -11,7 +11,7 @@ import Data.List.NonEmpty qualified as NonEmpty
 import Vehicle.Compile.Prelude (GenericArg (..))
 import Vehicle.Data.Builtin.Core
 import Vehicle.Data.Builtin.Interface (BuiltinHasNatLiterals)
-import Vehicle.Data.Code.Interface (pattern INatLiteral)
+import Vehicle.Data.Code.Interface (HasNatExpr, pattern INatLiteral)
 import Vehicle.Data.Code.Value
 
 -----------------------------------------------------------------------------
@@ -34,7 +34,7 @@ fixedStatus indices spine
   | maximum indices < length spine = Blocked $ traverseArgsAtIndices (NonEmpty.toList indices) 0 spine
   | otherwise = InsufficientArgs
 
-stackBlockingStatus :: (BuiltinHasNatLiterals builtin) => Spine builtin -> BlockingStatus builtin
+stackBlockingStatus :: (HasNatExpr Value Value builtin) => Spine builtin -> BlockingStatus builtin
 stackBlockingStatus = \case
   [] -> InsufficientArgs
   [_] -> InsufficientArgs

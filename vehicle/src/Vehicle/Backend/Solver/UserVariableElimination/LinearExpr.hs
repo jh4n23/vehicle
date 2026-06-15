@@ -4,8 +4,6 @@ module Vehicle.Backend.Solver.UserVariableElimination.LinearExpr
   )
 where
 
--- Needed as Applicative is exported by Prelude in GHC 9.6 and above.
-import Control.Applicative (Applicative (..))
 import Control.Monad.Except (MonadError (..), runExceptT)
 import Control.Monad.Trans (MonadTrans (..))
 import Vehicle.Compile.Constants.Rational
@@ -72,15 +70,21 @@ compile toVar shape = go
       ---------------------
       -- Inductive cases --
       ---------------------
-      VNegRatTensor (TensorOp1Args _ e) -> scaleExpr (-1) <$> go e
-      VAddRatTensor (TensorOp2Args _ e1 e2) -> addExprsUnsafe 1 1 <$> go e1 <*> go e2
-      VSubRatTensor (TensorOp2Args _ e1 e2) -> addExprsUnsafe 1 (-1) <$> go e1 <*> go e2
+      VNegRatTensor (TensorOp1Args _ e) -> scaleExpr (-1) =<< go e
+      VAddRatTensor (TensorOp2Args _ e1 e2) -> do
+        e1' <- go e1
+        e2' <- go e2
+        addExprsUnsafe 1 1 e1' e2'
+      VSubRatTensor (TensorOp2Args _ e1 e2) -> do
+        e1' <- go e1
+        e2' <- go e2
+        addExprsUnsafe 1 (-1) e1' e2'
       VMulRatTensor (TensorOp2Args _ e1 e2) -> do
         e1' <- compile toVar shape e1
         e2' <- compile toVar shape e2
         case (isConstant e1', isConstant e2') of
-          (Just (ConstantTensor _ c1), _) -> return $ scaleExpr c1 e2'
-          (_, Just (ConstantTensor _ c2)) -> return $ scaleExpr c2 e1'
+          (Just (ConstantTensor _ c1), _) -> scaleExpr c1 e2'
+          (_, Just (ConstantTensor _ c2)) -> scaleExpr c2 e1'
           (Just _, _) -> unreduced
           (_, Just _) -> unreduced
           _ -> throwError NonLinearity
@@ -88,7 +92,7 @@ compile toVar shape = go
         e1' <- compile toVar shape e1
         e2' <- compile toVar shape e2
         case isConstant e2' of
-          Just (ConstantTensor _ c2) -> return $ scaleExpr (1 / c2) e1'
+          Just (ConstantTensor _ c2) -> scaleExpr (1 / c2) e1'
           Just _ -> unreduced
           _ -> throwError NonLinearity
       VPowRatTensor {} -> throwError NonLinearity

@@ -158,16 +158,15 @@ compileToLossFunction ::
   Prog Builtin ->
   OutputAsJSON ->
   m ()
-compileToLossFunction LossOptions {..} typedProg outputAsJSON =
-  logCompilerPass Loss $ do
-    lossTensorProg <- convertToLossTensors differentiableLogicID typedProg
-    hoistedProg <- hoistInferableParameters lossTensorProg
-    functionalisedProg <- functionaliseResources hoistedProg
-    jsonProg <- convertToJSONProg functionalisedProg
-    let outputText
-          | outputAsJSON = prettyAsJSON jsonProg
-          | otherwise = prettyFriendly (convertFromJSONProg jsonProg)
-    writeResultToFile Nothing outputFile outputText
+compileToLossFunction LossOptions {..} typedProg outputAsJSON = do
+  lossTensorProg <- convertToLossTensors differentiableLogicID typedProg
+  hoistedProg <- hoistInferableParameters lossTensorProg
+  functionalisedProg <- functionaliseResources hoistedProg
+  jsonProg <- convertToJSONProg functionalisedProg
+  let outputText
+        | outputAsJSON = prettyAsJSON jsonProg
+        | otherwise = prettyFriendly (convertFromJSONProg jsonProg)
+  writeResultToFile Nothing outputFile outputText
 
 hoistInferableParameters ::
   (MonadCompile m, PrintableBuiltin builtin) =>

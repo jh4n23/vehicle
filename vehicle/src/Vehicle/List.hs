@@ -13,7 +13,7 @@ import Data.Text (Text, pack)
 import GHC.Generics
 import Vehicle.Compile.Error (CompileError (MultiPropertyTraveralError), MultiPropertyTraveralError (..))
 import Vehicle.Compile.ExpandResources (expandResources)
-import Vehicle.Compile.Normalise.NBE (evalDecl, normaliseClosure)
+import Vehicle.Compile.Normalise.NBE (evalInEmptyEnv, normaliseClosure)
 import Vehicle.Compile.Prelude hiding (Dataset, Network, Parameter, datasets, name, networks, parameters)
 import Vehicle.Compile.Print
 import Vehicle.Compile.Print.Error (prettyCompileError)
@@ -21,7 +21,7 @@ import Vehicle.Compile.Property (traverseMultiProperty)
 import Vehicle.Data.Builtin.Interface (Accessor (..))
 import Vehicle.Data.Builtin.Standard (Builtin (..), Quantifier)
 import Vehicle.Data.Code.Interface (QuantifyRatTensorArgs (..), accessQuantifyRatTensor)
-import Vehicle.Data.Code.Value (Closure, Spine, VDecl, VType, Value (..))
+import Vehicle.Data.Code.Value (Closure, Spine, VType, Value (..))
 import Vehicle.Data.Variable.Bound.Context.Name
 import Vehicle.Data.Variable.Free.Context (MonadFreeContext, addDeclEntryToContext, runFreshFreeContextT)
 import Vehicle.Prelude.Logging.Instance
@@ -159,21 +159,25 @@ searchDecls :: (MonadList m) => [Decl Builtin] -> m ()
 searchDecls = \case
   [] -> return ()
   d : ds -> do
-    normDecl <- evalDecl d
-    searchDecl normDecl
-    addDeclEntryToContext normDecl $ searchDecls ds
+    searchDecl d
+    addDeclEntryToContext d $ searchDecls ds
 
-searchDecl :: (MonadList m) => VDecl Builtin -> m ()
+searchDecl :: (MonadList m) => Decl Builtin -> m ()
 searchDecl decl = do
   case decl of
-    DefAbstract p ident sort typ -> case sort of
-      NetworkDef -> addNetwork p ident typ
-      DatasetDef -> addDataset p ident typ
-      ParameterDef s -> addParameter p ident typ s
-      BuiltinDef -> return ()
+    DefAbstract p ident sort typ -> do
+      normType <- evalInEmptyEnv typ
+      case sort of
+        NetworkDef -> addNetwork p ident normType
+        DatasetDef -> addDataset p ident normType
+        ParameterDef s -> addParameter p ident normType s
+        BuiltinDef -> return ()
     DefFunction p ident sort typ body
       | not $ isAnnotatedAsProperty sort -> return ()
-      | otherwise -> addProperty p ident typ body
+      | otherwise -> do
+          normType <- evalInEmptyEnv typ
+          normBody <- evalInEmptyEnv body
+          addProperty p ident normType normBody
     DefRecord {} -> return ()
 
 addNetwork :: (MonadList m) => Provenance -> Identifier -> VType Builtin -> m ()
@@ -265,7 +269,7 @@ searchSpine :: (MonadListProperty m) => Spine Builtin -> m ()
 searchSpine = traverse_ (traverse_ searchValue)
 
 searchBuiltinForQuantifier :: (MonadListProperty m) => Value Builtin -> m ()
-searchBuiltinForQuantifier value = case getExpr (accessQuantifyRatTensor @Value @Builtin @Closure) value of
+searchBuiltinForQuantifier value = case getExpr (accessQuantifyRatTensor @Value @Value @Builtin @Closure) value of
   Just (q, args) -> do
     let (name, p) = getNamedBinderInfo (quantifyBinder args)
     let typeText = entityTypeText (typeOf $ quantifyBinder args)

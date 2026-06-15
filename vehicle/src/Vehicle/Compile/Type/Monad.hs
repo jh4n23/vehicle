@@ -70,11 +70,11 @@ runTypeCheckerTInitially ::
   InstanceDatabase builtin ->
   ImportedModuleContext builtin ->
   TypeCheckerT builtin m a ->
-  m (a, ModuleTypingInterface builtin, FreeEnv builtin)
+  m (a, ModuleTypingInterface builtin, FreeCtx builtin)
 runTypeCheckerTInitially builtinInstances importedCtx e = do
   let state = emptyTypeCheckerState builtinInstances importedCtx
   (result, internalState) <- runTypeCheckerT state e
-  return (result, currentModuleInterface internalState, currentFreeEnv internalState)
+  return (result, currentModuleInterface internalState, currentFreeCtx internalState)
 
 -- | Runs a hypothetical computation in the type-checker,
 -- returning the resulting state of the type-checker.

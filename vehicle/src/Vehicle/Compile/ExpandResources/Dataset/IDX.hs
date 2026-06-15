@@ -22,6 +22,7 @@ import Data.Vector.Unboxed (Vector)
 import Data.Vector.Unboxed qualified as Vector
 import Vehicle.Compile.Error
 import Vehicle.Compile.ExpandResources.Core
+import Vehicle.Compile.Normalise.NBE
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
 import Vehicle.Data.Builtin.Standard
@@ -125,9 +126,10 @@ parseRecord ctx currentDim actualDims actualElems ident spine = do
       exprs <- zipWithM (parseField ds) splitElems fieldDeclarations
       return $ VRecord (VFreeVar ident spine) $ OMap.fromList exprs
   where
-    parseField :: TensorShape -> Vector a -> GenericRecordField (VType Builtin) -> m (FieldName, Value Builtin)
-    parseField elemShape elems (fieldName, fieldTyp) = do
-      fieldValue <- parseContainer ctx (currentDim + 1) elemShape elems fieldTyp
+    parseField :: TensorShape -> Vector a -> GenericRecordField (Type Builtin) -> m (FieldName, Value Builtin)
+    parseField elemShape elems (fieldName, fieldType) = do
+      normFieldType <- evalInEmptyEnv fieldType
+      fieldValue <- parseContainer ctx (currentDim + 1) elemShape elems normFieldType
       return (fieldName, fieldValue)
 
 parseTensor ::

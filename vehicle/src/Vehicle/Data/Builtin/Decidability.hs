@@ -298,14 +298,17 @@ instance NormalisableBuiltin DecidabilityBuiltin where
     _ -> Nothing
 
 evalBoolTensorToProp ::
-  (MonadNormBuiltin m, HasBuiltinConstructor expr) =>
-  TensorOp1Args (expr DecidabilityBuiltin) ->
+  forall m expr thunk.
+  (MonadNormBuiltin m, NormalisableExpr expr thunk, HasBuiltinConstructor expr thunk) =>
+  TensorOp1Args (thunk DecidabilityBuiltin) ->
   m (expr DecidabilityBuiltin)
-evalBoolTensorToProp args = return $ case args of
-  TensorOp1Args _ (getExpr accessBuiltinC -> Just (StandardBuiltinConstructor (BoolTensorLiteral t), [])) -> do
-    let op = if anyTensor not t then PropFalse else PropTrue
-    mkExpr accessBuiltinC (DecidabilityBuiltinFunction op, [])
-  _ -> developerError $ "Should not be possible to have non-literal" <+> pretty BoolTensorToProp <+> "args"
+evalBoolTensorToProp (TensorOp1Args _ value) = do
+  let forcedValue = force @expr value
+  return $ case getExpr accessBuiltinC forcedValue of
+    Just (StandardBuiltinConstructor (BoolTensorLiteral t), []) -> do
+      let op = if anyTensor not t then PropFalse else PropTrue
+      mkExpr accessBuiltinC (DecidabilityBuiltinFunction op, [])
+    _ -> developerError $ "Should not be possible to have non-literal" <+> pretty BoolTensorToProp <+> "args"
 
 evalBoolVectorToProp ::
   (MonadNormBuiltin m) =>

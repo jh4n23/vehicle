@@ -5,9 +5,9 @@ import Data.Aeson (ToJSON)
 import Data.Aeson.Types (FromJSON)
 import GHC.Generics
 import Prettyprinter
-import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Tensor (TensorShape)
 import Vehicle.Prelude
+import Vehicle.Data.Builtin.Core (BuiltinType(..))
 
 --------------------------------------------------------------------------------
 -- Networks

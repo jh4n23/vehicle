@@ -2,6 +2,7 @@
 
 module Vehicle.Compile.Constants.Value where
 
+import Control.Monad.Identity (Identity (..))
 import Vehicle.Data.Assertion
 import Vehicle.Data.Builtin.Interface.Normalise
 import Vehicle.Data.Builtin.Loss
@@ -20,19 +21,12 @@ import Vehicle.Prelude.Logging
 -- Tensors of values
 
 type HasRatTensors builtin =
-  ( HasRatExpr Value builtin,
-    HasRatType Value builtin,
+  ( HasRatExpr Value Value builtin,
+    HasRatType Value Value builtin,
     HasTensorLiterals Value builtin
   )
 
 type TensorValueLinearExpr builtin = LinearExpr SliceVariable (DimensionedTensorValue builtin)
-
-tensorValueLinearExprToValue :: (HasRatTensors builtin) => LinearExpr SliceVariable (DimensionedTensorValue builtin) -> DimensionedTensorValue builtin
-tensorValueLinearExprToValue linearExpr = do
-  let dims = tensorValueDims $ constantValue linearExpr
-  let mkVarTerm v = TensorValue dims (VBoundVar (toLv v) [])
-  let mkTerm (v, coeff) = scaleConstant coeff (mkVarTerm v)
-  linearExprToExpr id mkTerm (addConstants 1 1) linearExpr
 
 type UserVariableConstraint builtin = Assertion (TensorValueLinearExpr builtin)
 
@@ -74,10 +68,14 @@ scaleDimensionedValue c (TensorValue dims e) = do
 
 addDimensionedConstants ::
   (HasRatTensors builtin) =>
-  AddConstants (DimensionedTensorValue builtin)
+  Coefficient ->
+  Coefficient ->
+  DimensionedTensorValue builtin ->
+  DimensionedTensorValue builtin ->
+  DimensionedTensorValue builtin
 addDimensionedConstants c1 c2 v1 v2 = do
-  let cv1 = scaleConstant c1 v1
-  let cv2 = scaleConstant c2 v2
+  let cv1 = scaleDimensionedValue c1 v1
+  let cv2 = scaleDimensionedValue c2 v2
   addDimensionedValue cv1 cv2
 
 dimensionedValueToRatTensor ::
@@ -141,16 +139,17 @@ unstackTensorValues (TensorValue dims value) = case dims of
     fmap (TensorValue ds) values
   _ -> developerError "Cannot unstack tensor with unknown dimensions"
 
-instance (HasRatTensors builtin) => ConstantLike (DimensionedTensorValue builtin) where
-  addConstants = addDimensionedConstants
-  scaleConstant = scaleDimensionedValue
-  toRatTensor = dimensionedValueToRatTensor
-  minConstants = minTensorValues
-  maxConstants = maxTensorValues
-  stackConstants = stackTensorValues
-  unstackConstants = unstackTensorValues
+instance (HasRatTensors builtin, Monad m) => ConstantLike (DimensionedTensorValue builtin) m where
+  addConstants a b xs ys = return $ addDimensionedConstants a b xs ys
+  scaleConstant a xs = return $ scaleDimensionedValue a xs
+  toRatTensor x = return $ dimensionedValueToRatTensor x
+  minConstants xs ys = return $ minTensorValues xs ys
+  maxConstants xs ys = return $ maxTensorValues xs ys
+  stackConstants xss = return $ stackTensorValues xss
+  unstackConstants xs = return $ unstackTensorValues xs
 
 tensorLinearExprToExpr :: (HasRatTensors builtin) => VDims builtin -> TensorValueLinearExpr builtin -> Value builtin
-tensorLinearExprToExpr dims linexp = tensorValue $ linearExprToExpr id fromVar addDimensionedValue linexp
+tensorLinearExprToExpr dims linexp = tensorValue $ runIdentity $ linearExprToExpr id fromVar addParts linexp
   where
-    fromVar (v, c) = scaleDimensionedValue c (TensorValue dims (VBoundVar (toLv v) []))
+    fromVar (v, c) = return $ scaleDimensionedValue c (TensorValue dims (VBoundVar (toLv v) []))
+    addParts x y = return $ addDimensionedValue x y

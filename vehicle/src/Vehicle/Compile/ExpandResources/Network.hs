@@ -1,5 +1,6 @@
 module Vehicle.Compile.ExpandResources.Network
   ( checkNetwork,
+    getTensorRecordShape,
   )
 where
 
@@ -8,18 +9,18 @@ import Data.List.NonEmpty qualified as NonEmpty
 import Data.Map qualified as Map
 import Vehicle.Compile.Error
 import Vehicle.Compile.ExpandResources.Core
-import Vehicle.Compile.Normalise.NBE (normaliseClosureInCtx)
+import Vehicle.Compile.Normalise.NBE (evalInEmptyEnv, normaliseClosureInCtx)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
 import Vehicle.Compile.Resource
-import Vehicle.Compile.Scope.Records (constructTensorisableDims)
 import Vehicle.Data.Builtin.Standard
 import Vehicle.Data.Code.Interface
-import Vehicle.Data.Code.TypedView (DimensionsValue (..), TypeValue (..), toDimensionsValue, toTypeValue)
+import Vehicle.Data.Code.TypedView (DimensionsValue (..), TypeValue (..), toTypeValue, toDimensionsValue)
 import Vehicle.Data.Code.Value
 import Vehicle.Data.Tensor (TensorShape)
-import Vehicle.Data.Variable.Free.Context (getRecordFieldNames, getRecordFields)
+import Vehicle.Data.Variable.Free.Context (MonadFreeContext, getRecordFieldNames, getRecordFields)
 import Vehicle.Verify.Core (NetworkContextInfo (..))
+import Vehicle.Data.Builtin.Interface.Normalise (getDims)
 
 --------------------------------------------------------------------------------
 -- Network typing
@@ -62,7 +63,7 @@ getNetworkType decl networkType = case normalised networkType of
       VFreeTypeVar ident _spine -> do
         fieldNames <- getRecordFieldNames ident
         fields <- getRecordFields ident
-        let shape = constructTensorisableDims fields
+        shape <- getTensorRecordShape fields
         return $ UniModal (RecordIOType $ NetworkRecordType NetworkRatType ident shape $ NonEmpty.toList fieldNames)
       _ -> typingError
 
@@ -93,3 +94,17 @@ getNetworkType decl networkType = case normalised networkType of
         "Invalid network type"
           <+> squotes (prettyVerbose $ normalised networkType)
           <+> "should have been caught during type-checking"
+
+getTensorRecordShape ::
+  (MonadFreeContext Builtin m) =>
+  GenericRecordFields (Expr Builtin) ->
+  m TensorShape
+getTensorRecordShape [] = developerError "@tensor record should not have empty fields"
+getTensorRecordShape fields@((_n, typ) : _fs) = do
+  value <- evalInEmptyEnv typ
+  return $ case toTypeValue value of
+    VRatTensorType dims -> do
+      case getDims dims of
+        Just d -> length fields : d
+        Nothing -> [length fields]
+    _ -> [length fields]

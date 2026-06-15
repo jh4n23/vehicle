@@ -5,6 +5,8 @@ module Vehicle.Compile.Descope
     descopeExprNaively,
     descopeValueNaively,
     genericDescopeExpr,
+    descopeForcedValueNaively,
+    descopeThunkNaively,
     ixToName,
   )
 where
@@ -14,6 +16,8 @@ import Vehicle.Compile.Prelude
 import Vehicle.Data.AST.Expr.Desugared qualified as S
 import Vehicle.Data.Builtin.Interface.Print
 import Vehicle.Data.Builtin.Standard.Core (Builtin)
+import Vehicle.Data.Code.ForcedValue (ForcedValue, Thunk)
+import Vehicle.Data.Code.ForcedValue qualified as F
 import Vehicle.Data.Code.Value
 import Vehicle.Data.Universe (UniverseLevel)
 import Vehicle.Data.Variable.Bound.Context.Name.Class
@@ -72,6 +76,20 @@ descopeValueNaively ::
   S.Expr Builtin
 descopeValueNaively e = runFreshNameBoundContext (genericDescopeValue Naive e)
 
+-- | Note that you cannot descope `Value` non-naively as you can't descope
+-- closures properly. You have to quote the `Value` first.
+descopeForcedValueNaively ::
+  (PrintableBuiltin builtin) =>
+  ForcedValue builtin ->
+  S.Expr Builtin
+descopeForcedValueNaively e = runFreshNameBoundContext (genericDescopeForcedValue Naive e)
+
+descopeThunkNaively ::
+  (PrintableBuiltin builtin) =>
+  Thunk builtin ->
+  S.Expr Builtin
+descopeThunkNaively e = runFreshNameBoundContext (descopeThunk Naive e)
+
 --------------------------------------------------------------------------------
 -- Variable conversion methods
 
@@ -123,6 +141,15 @@ genericDescopeExpr f e = showDescopeExit $ case showDescopeEntry e of
   RecordProj p _recordType record field -> do
     record' <- genericDescopeExpr f record
     return $ S.RecordAcc p record' field
+
+descopeUniverse :: Provenance -> UniverseLevel -> S.Expr Builtin
+descopeUniverse p _u = S.Universe p
+
+descopeMeta :: Provenance -> MetaID -> S.Expr Builtin
+descopeMeta p m = S.Hole p (layoutAsText $ pretty m)
+
+descopeFreeVar :: Provenance -> Identifier -> S.Expr Builtin
+descopeFreeVar p ident = S.Var p (nameOf ident)
 
 --------------------------------------------------------------------------------
 -- Value
@@ -180,14 +207,75 @@ genericDescopeValue f e = case e of
   where
     p = mempty
 
-descopeUniverse :: Provenance -> UniverseLevel -> S.Expr Builtin
-descopeUniverse p _u = S.Universe p
+--------------------------------------------------------------------------------
+-- Value
 
-descopeMeta :: Provenance -> MetaID -> S.Expr Builtin
-descopeMeta p m = S.Hole p (layoutAsText $ pretty m)
+descopeThunk ::
+  forall m builtin.
+  (PrintableBuiltin builtin, MonadNameContext m) =>
+  VarStrategy ->
+  Thunk builtin ->
+  m (S.Expr Builtin)
+descopeThunk f = \case
+  F.Forced value -> genericDescopeForcedValue f value
+  F.Unforced env value -> do
+    body' <- genericDescopeExpr (ixToName f) $ convertExprBuiltins value
+    env' <- traverse (genericDescopeForcedValue f) (F.cheatEnvToValues env) :: m [S.Expr Builtin]
+    let envExpr = S.normAppList (S.Var mempty "ENV") $ fmap (Arg Explicit Relevant) env'
+    return $ S.App envExpr [explicit body']
 
-descopeFreeVar :: Provenance -> Identifier -> S.Expr Builtin
-descopeFreeVar p ident = S.Var p (nameOf ident)
+descopeForcedClosure ::
+  forall m binder builtin.
+  (PrintableBuiltin builtin, MonadNameContext m) =>
+  VarStrategy ->
+  GenericBinder binder ->
+  F.Closure builtin ->
+  m (S.Expr Builtin)
+descopeForcedClosure f _binder (F.Closure env body) = do
+  body' <- genericDescopeExpr (ixToName f) $ convertExprBuiltins body
+  env' <- traverse (genericDescopeForcedValue f) (F.cheatEnvToValues env) :: m [S.Expr Builtin]
+  let envExpr = S.normAppList (S.Var mempty "ENV") $ fmap (Arg Explicit Relevant) env'
+  return $ S.App envExpr [explicit body']
+
+-- | This function is not meant to do anything sensible and is merely
+-- used for printing `WHNF`s in a readable form.
+genericDescopeForcedValue ::
+  (MonadNameContext m, PrintableBuiltin builtin) =>
+  VarStrategy ->
+  ForcedValue builtin ->
+  m (S.Expr Builtin)
+genericDescopeForcedValue f e = case e of
+  F.VUniverse u ->
+    return $ descopeUniverse p u
+  F.VMeta m spine ->
+    S.normAppList (descopeMeta p m) <$> traverseArgs (descopeThunk f) spine
+  F.VFreeVar v spine ->
+    S.normAppList (descopeFreeVar p v) <$> traverseArgs (descopeThunk f) spine
+  F.VBuiltin b spine -> do
+    fn <- genericDescopeExpr (ixToName f) $ convertBuiltin p b
+    S.normAppList fn <$> traverseArgs (descopeThunk f) spine
+  F.VBoundVar v spine -> do
+    var <- S.Var p <$> lvToName f p v
+    args <- traverseArgs (descopeThunk f) spine
+    return $ S.normAppList var args
+  F.VPi binder closure -> do
+    binder' <- traverse (descopeThunk f) binder
+    body' <- addNameToContext binder $ descopeForcedClosure f binder closure
+    return $ S.Pi p binder' body'
+  F.VLam binder closure -> do
+    binder' <- traverse (descopeThunk f) binder
+    body' <- addNameToContext binder $ descopeForcedClosure f binder closure
+    return $ S.Lam p binder' body'
+  F.VRecord _recordType fields -> do
+    fields' <- traverseRecordFields (descopeThunk f) $ OMap.assocs fields
+    return $ S.Record p fields'
+  F.VRecordAcc _recordType record field spine -> do
+    record' <- descopeThunk f record
+    let recordAcc = S.RecordAcc p record' field
+    args <- traverseArgs (descopeThunk f) spine
+    return $ S.normAppList recordAcc args
+  where
+    p = mempty
 
 --------------------------------------------------------------------------------
 -- Logging and errors

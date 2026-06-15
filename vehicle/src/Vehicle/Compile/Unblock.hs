@@ -193,7 +193,7 @@ unblockIf unblock (IfArgs _ c x y) =
 unblockOp2 ::
   (MonadUnblock m) =>
   TypeUnblockingFunction (Value Builtin) m ->
-  EvalSimple Op2Args Value Builtin m ->
+  EvalSimple Value Value Op2Args Builtin m ->
   OperationUnblockingFunction Op2Args (Value Builtin) m
 unblockOp2 unblock evalFn (Op2Args x y) = do
   x' <- unblock x
@@ -205,7 +205,7 @@ unblockOp2 unblock evalFn (Op2Args x y) = do
 
 unblockIndexOp2 ::
   (MonadUnblock m) =>
-  EvalSimple IndexComparisonArgs Value Builtin m ->
+  EvalSimple Value Value IndexComparisonArgs Builtin m ->
   OperationUnblockingFunction IndexComparisonArgs (Value Builtin) m
 unblockIndexOp2 evalFn (IndexComparisonArgs n1 n2 x y) = do
   x' <- unblockIndexValue x
@@ -218,7 +218,7 @@ unblockIndexOp2 evalFn (IndexComparisonArgs n1 n2 x y) = do
 unblockTensorOp1 ::
   (MonadUnblock m) =>
   TypeUnblockingFunction (Value Builtin) m ->
-  EvalSimple TensorOp1Args Value Builtin m ->
+  EvalSimple Value Value TensorOp1Args Builtin m ->
   OperationUnblockingFunction TensorOp1Args (Value Builtin) m
 unblockTensorOp1 unblock evalFn (TensorOp1Args ds xs) = do
   xs' <- unblock xs
@@ -227,7 +227,7 @@ unblockTensorOp1 unblock evalFn (TensorOp1Args ds xs) = do
 unblockTensorOp2 ::
   (MonadUnblock m) =>
   TypeUnblockingFunction (Value Builtin) m ->
-  EvalSimple TensorOp2Args Value Builtin m ->
+  EvalSimple Value Value TensorOp2Args Builtin m ->
   OperationUnblockingFunction TensorOp2Args (Value Builtin) m
 unblockTensorOp2 unblock evalFn (TensorOp2Args ds xs ys) = do
   xs' <- unblock xs

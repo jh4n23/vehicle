@@ -172,7 +172,7 @@ createSubstitutionForVariable ::
   m (LinearSubstitution SliceVariable, CompilationStep)
 createSubstitutionForVariable varToSolveFor (NormalisedRelation () linearExpr) = do
   nestedVar <- lookupNestedSliceVariable varToSolveFor
-  let (_, rearrangedExpr) = rearrangeExprToSolveFor (toSliceVar varToSolveFor) linearExpr
+  (_, rearrangedExpr) <- rearrangeExprToSolveFor (toSliceVar varToSolveFor) linearExpr
   varSubsts <- go nestedVar rearrangedExpr
   let step = SolveEquality nestedVar rearrangedExpr
   return (Map.fromList varSubsts, step)

@@ -1,13 +1,17 @@
-module Vehicle.Data.Code.Value
-  ( Closure (..),
-    Value (..),
-    VType,
-    VArg,
-    VBinder,
-    VTelescope,
-    VRecordFields,
-    VDims,
-    Spine,
+module Vehicle.Data.Code.ForcedValue
+  ( ForcedValue (..),
+    Closure (..),
+    extendClosure,
+    extendClosureWithBound,
+    Thunk (..),
+    ForcedType,
+    UnforcedType,
+    UnforcedArg,
+    UnforcedBinder,
+    UnforcedTelescope,
+    UnforcedRecordFields,
+    UnforcedDims,
+    UnforcedSpine,
     getNMeta,
     BoundEnv (..),
     lookupIxInEnv,
@@ -32,7 +36,7 @@ import Data.Foldable (traverse_)
 import Data.Map.Ordered (OMap)
 import Data.Maybe (fromMaybe)
 import GHC.Generics
-import Vehicle.Data.AST.Expr.Scoped (Expr)
+import Vehicle.Data.AST.Expr.Scoped (Expr (..))
 import Vehicle.Data.Builtin.Interface
 import Vehicle.Data.Code.Interface
 import Vehicle.Data.Universe (UniverseLevel)
@@ -44,43 +48,56 @@ import Vehicle.Data.Variable.Bound.Level
 import Vehicle.Prelude
 
 -----------------------------------------------------------------------------
--- WHNF closures
+-- Thunks
+
+data Thunk builtin
+  = Forced (ForcedValue builtin)
+  | Unforced (BoundEnv builtin) (Expr builtin)
+  deriving (Show, Generic, Eq, Ord)
 
 -- | Closures for weak-head normal-form.
 data Closure builtin = Closure (BoundEnv builtin) (Expr builtin)
   deriving (Show, Generic, Eq, Ord)
+
+extendClosure :: Closure builtin -> UnforcedBinder builtin -> Thunk builtin -> Thunk builtin
+extendClosure (Closure env expr) binder value = Unforced (extendEnvWithDefined value binder env) expr
+
+extendClosureWithBound :: Closure builtin -> UnforcedBinder builtin -> Lv -> Thunk builtin
+extendClosureWithBound (Closure env expr) binder lv = Unforced (extendEnvWithBound lv binder env) expr
 
 -----------------------------------------------------------------------------
 -- Normalised expressions
 
 -- | A normalised expression. Internal invariant is that it should always be
 -- well-typed.
-data Value builtin
+data ForcedValue builtin
   = VUniverse !UniverseLevel
-  | VMeta !MetaID !(Spine builtin)
-  | VFreeVar !Identifier !(Spine builtin)
-  | VBoundVar !Lv !(Spine builtin)
-  | VBuiltin !builtin !(Spine builtin)
-  | VLam !(VBinder builtin) !(Closure builtin)
-  | VPi !(VBinder builtin) !(Closure builtin)
-  | VRecord (VType builtin) !(VRecordFields builtin)
-  | VRecordAcc !(VType builtin) !(Value builtin) !FieldName !(Spine builtin)
+  | VMeta !MetaID !(UnforcedSpine builtin)
+  | VFreeVar !Identifier !(UnforcedSpine builtin)
+  | VBoundVar !Lv !(UnforcedSpine builtin)
+  | VBuiltin !builtin !(UnforcedSpine builtin)
+  | VLam !(UnforcedBinder builtin) !(Closure builtin)
+  | VPi !(UnforcedBinder builtin) !(Closure builtin)
+  | VRecord (Thunk builtin) !(UnforcedRecordFields builtin)
+  | VRecordAcc !(Thunk builtin) !(Thunk builtin) !FieldName !(UnforcedSpine builtin)
   deriving (Show, Generic, Eq, Ord)
 
-type VType builtin = Value builtin
+type ForcedType builtin = ForcedValue builtin
 
-type VArg builtin = GenericArg (Value builtin)
+type UnforcedType builtin = Thunk builtin
 
-type VBinder builtin = GenericBinder (Value builtin)
-
-type VTelescope builtin = GenericTelescope (Value builtin)
-
-type VRecordFields builtin = OMap FieldName (Value builtin)
-
-type VDims builtin = Value builtin
+type UnforcedArg builtin = GenericArg (Thunk builtin)
 
 -- | A list of arguments for an application that cannot be normalised.
-type Spine builtin = [VArg builtin]
+type UnforcedSpine builtin = [UnforcedArg builtin]
+
+type UnforcedBinder builtin = GenericBinder (Thunk builtin)
+
+type UnforcedTelescope builtin = GenericTelescope (Thunk builtin)
+
+type UnforcedRecordFields builtin = OMap FieldName (Thunk builtin)
+
+type UnforcedDims builtin = Thunk builtin
 
 ----------------------------------------------------------------------------
 -- Bound environments
@@ -88,10 +105,10 @@ type Spine builtin = [VArg builtin]
 -- | The information stored for each variable in the environment. We choose
 -- to store the binder as it's a convenient mechanism for passing through
 -- name, relevance for pretty printing and debugging.
-type EnvEntry builtin = Value builtin
+type EnvEntry builtin = Thunk builtin
 
 unbound :: Lv -> EnvEntry builtin
-unbound lv = VBoundVar lv []
+unbound lv = Forced $ VBoundVar lv []
 
 newtype BoundEnv builtin = BoundEnv
   { unBoundEnv :: GenericBoundCtx (GenericBinder (), EnvEntry builtin)
@@ -101,7 +118,7 @@ newtype BoundEnv builtin = BoundEnv
 emptyBoundEnv :: BoundEnv builtin
 emptyBoundEnv = BoundEnv mempty
 
-lookupIxInEnv :: BoundEnv builtin -> Ix -> Value builtin
+lookupIxInEnv :: BoundEnv builtin -> Ix -> Thunk builtin
 lookupIxInEnv (BoundEnv env) i = snd $ lookupIxInBoundCtx i env
 
 -- | Note that the `ctxSize` must come from the current context and not a
@@ -116,7 +133,7 @@ extendEnvWithBound ctxSize binder (BoundEnv env) =
   BoundEnv $ (void binder, unbound ctxSize) : env
 
 extendEnvWithDefined ::
-  Value builtin ->
+  Thunk builtin ->
   GenericBinder expr ->
   BoundEnv builtin ->
   BoundEnv builtin
@@ -137,10 +154,10 @@ boundEnvToCtx :: BoundEnv builtin -> NamedBoundCtx
 boundEnvToCtx (BoundEnv env) = toNamedBoundCtx (fmap fst env)
 
 -- | Converts an environment to set of values suitable for printing
-cheatEnvToValues :: BoundEnv builtin -> GenericBoundCtx (Value builtin)
+cheatEnvToValues :: BoundEnv builtin -> GenericBoundCtx (ForcedValue builtin)
 cheatEnvToValues (BoundEnv env) = fmap entryToValue env
   where
-    entryToValue :: (GenericBinder (), EnvEntry builtin) -> Value builtin
+    entryToValue :: (GenericBinder (), EnvEntry builtin) -> ForcedValue builtin
     entryToValue (binder, value) = do
       let ident = stdlibIdentifier (fromMaybe "_" (nameOf binder) <> " =")
       let arg = explicit value
@@ -149,16 +166,16 @@ cheatEnvToValues (BoundEnv env) = fmap entryToValue env
 ----------------------------------------------------------------------------
 -- Free environments
 
-traverseEnv_ :: (Monad m) => (Value builtin -> m ()) -> BoundEnv builtin -> m ()
+traverseEnv_ :: (Monad m) => (Thunk builtin -> m ()) -> BoundEnv builtin -> m ()
 traverseEnv_ f (BoundEnv env) = traverse_ (\(_, v) -> f v) env
 
-traverseEnv :: (Monad m) => (Value builtin -> m (Value builtin)) -> BoundEnv builtin -> m (BoundEnv builtin)
+traverseEnv :: (Monad m) => (Thunk builtin -> m (Thunk builtin)) -> BoundEnv builtin -> m (BoundEnv builtin)
 traverseEnv f (BoundEnv env) = BoundEnv <$> traverse (\(u, v) -> (u,) <$> f v) env
 
 -----------------------------------------------------------------------------
 -- Patterns
 
-getNMeta :: Value builtin -> Maybe MetaID
+getNMeta :: ForcedValue builtin -> Maybe MetaID
 getNMeta (VMeta m _) = Just m
 getNMeta _ = Nothing
 
@@ -168,7 +185,7 @@ getNMeta _ = Nothing
 -- | A pair of an unnormalised and normalised expression.
 data GluedExpr builtin = Glued
   { unnormalised :: Expr builtin,
-    normalised :: Value builtin
+    normalised :: ForcedValue builtin
   }
   deriving (Show, Generic)
 
@@ -184,15 +201,15 @@ type GluedType builtin = GluedExpr builtin
 -- type-classes over tensor values with a given dimension. Hence we need
 -- to wrap them in this ugly type-class that stores the dimensions internally.
 data DimensionedTensorValue builtin = TensorValue
-  { tensorValueDims :: VDims builtin,
-    tensorValue :: Value builtin
+  { tensorValueDims :: UnforcedDims builtin,
+    tensorValue :: Thunk builtin
   }
   deriving (Show, Eq, Ord)
 
 -----------------------------------------------------------------------------
 -- Instances
 
-instance (HasBuiltinConstructor Value Value) where
+instance HasBuiltinConstructor ForcedValue Thunk where
   accessBuiltinC =
     Access
       { getExpr = \case
@@ -200,15 +217,16 @@ instance (HasBuiltinConstructor Value Value) where
           _ -> Nothing,
         mkExpr = uncurry VBuiltin
       }
-  exprToThunk = id
+  exprToThunk = Forced
 
-instance HasLambdaConstructor Value Value Closure where
+instance HasLambdaConstructor ForcedValue Thunk Closure where
   accessForcedLamC =
     Access
       { getExpr = \case
-          VLam binder closure -> Just (binder, closure)
+          Forced (VLam binder closure) -> Just (binder, closure)
+          Unforced env (Lam _p binder body) -> Just (fmap (Unforced env) binder, Closure env body)
           _ -> Nothing,
-        mkExpr = uncurry VLam
+        mkExpr = \(binder, closure) -> Forced $ VLam binder closure
       }
   accessBoundVarC =
     Access

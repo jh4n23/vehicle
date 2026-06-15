@@ -22,6 +22,7 @@ import Vehicle.Backend.Solver.UserVariableElimination.PurifyAssertion (purifyAss
 import Vehicle.Compile.Constants.Rational
 import Vehicle.Compile.Error
 import Vehicle.Compile.ExpandResources.Core (lookupNetworkInfo)
+import Vehicle.Compile.ExpandResources.Network (getTensorRecordShape)
 import Vehicle.Compile.LiftIf (unfoldIf)
 import Vehicle.Compile.LowerNot (lowerNot)
 import Vehicle.Compile.Normalise.NBE
@@ -29,11 +30,10 @@ import Vehicle.Compile.Normalise.Quote (unnormaliseInCtx)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Compile.Resource
-import Vehicle.Compile.Scope.Records (constructFromTensorFreeVar, constructTensorisableDims, constructToTensorFreeVar)
 import Vehicle.Compile.Unblock (OperationUnblockingFunction, TypeUnblockingFunction, UnblockingActions (..))
 import Vehicle.Compile.Unblock qualified as Unblocking
 import Vehicle.Compile.Variable (createUserVar)
-import Vehicle.Data.Builtin.Interface.Normalise (evalAtTensor, unoptimisedEvalReduceAndTensor)
+import Vehicle.Data.Builtin.Interface.Normalise (evalAtTensor, getDims, unoptimisedEvalReduceAndTensor)
 import Vehicle.Data.Builtin.Standard
 import Vehicle.Data.Code.BooleanExpr (elimIfTree)
 import Vehicle.Data.Code.DSL
@@ -50,6 +50,7 @@ import Vehicle.Verify.Core
 import Vehicle.Verify.QueryFormat (QueryFormat (..), supportsStrictInequalities)
 import Vehicle.Verify.Specification (CompilationStep (..))
 import Prelude hiding (Applicative (..))
+import Vehicle.Compile.Scope.Records (constructFromTensorFreeVar, constructToTensorFreeVar)
 
 eliminateExistsRecord ::
   (MonadQueryStructure m) =>
@@ -82,7 +83,7 @@ wrapQuantifyRecord QuantifyRecordArgs {..} = do
   -- Construct \r -> body from binder and body in record quantifier args
   recordQLam <- unnormaliseInCtx $ VLam quantifyRecordBinder quantifyRecordBody
   fields <- getRecordFields recordTypeIdent
-  let shape = constructTensorisableDims fields
+  shape <- getTensorRecordShape fields
   let dims = mkDims shape
 
   -- Build tensor binder with appropriate dims and type for record

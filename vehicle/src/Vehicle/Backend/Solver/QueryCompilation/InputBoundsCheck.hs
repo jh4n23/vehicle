@@ -17,7 +17,6 @@ import Vehicle.Backend.Solver.QueryCompilation.Core (MonadQueryCompilation)
 import Vehicle.Backend.Solver.UserVariableElimination.Core
 import Vehicle.Compile.Constants.Rational
 import Vehicle.Compile.Error
-import Vehicle.Compile.ExpandResources.Core (lookupNetworkInfo)
 import Vehicle.Compile.Normalise.Quote (Quote (..))
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Resource (NetworkModality (..), NetworkName)
@@ -27,14 +26,14 @@ import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Code.BooleanExpr
 import Vehicle.Data.MaybeTrivial (MonadMaybeTrivial (..))
 import Vehicle.Data.Tensor (HasShape (..), RatTensor, TensorShape)
-import Vehicle.Data.Tensor.Traversal (toPartialShape)
 import Vehicle.Data.Variable.Bound.Context.Name
 import Vehicle.Data.Variable.Bound.Context.Tensor.Class (MonadReadableTensorBoundContext, getCompleteNamedCtx, lookupParentTensorVariable)
 import Vehicle.Data.Variable.Bound.Level
 import Vehicle.Prelude.Warning (CompileWarning (..))
-import Vehicle.Verify.Core (inputShape)
 import Vehicle.Verify.QueryFormat.Core (QueryFormatID (..))
 import Vehicle.Verify.QueryFormat.Interface (QueryFormat (..))
+import Vehicle.Compile.ExpandResources.Core (lookupNetworkInfo)
+import Vehicle.Verify.Core (inputShape)
 
 --------------------------------------------------------------------------------
 -- Interface
@@ -171,7 +170,7 @@ lookupCorrespondingInputVar var = do
       Just $
         VariableInfo
           { parentVariable = toTensorVar inputVar,
-            parentShape = toPartialShape (shapeOf nestedSliceVar) Nothing,
+            parentShape = shapeOf nestedSliceVar,
             indices = indices
           }
 
@@ -191,9 +190,8 @@ checkAllBoundsPresent (Partial allPartialbounds assertions) = do
     case Map.lookup var allPartialbounds of
       Nothing -> errorCase wholeTensorUnbounded
       Just partialBounds -> do
-        let partialShapeOrShapes = flip toPartialShape Nothing <$> varShape
-        missingIndicesOrFlattenedBounds <- case partialShapeOrShapes of
-          UniModal partialShape -> fourierMotzkinTensorBoundsElimination partialShape partialBounds
+        missingIndicesOrFlattenedBounds <- case varShape of
+          UniModal {} -> fourierMotzkinTensorBoundsElimination partialBounds
           MultiModal _partialShapes -> error "MultiModal IO is not implmeneted yet"
         case missingIndicesOrFlattenedBounds of
           Right bounds -> return $ Right (BoundedValue var bounds)

@@ -391,12 +391,13 @@ getLastArgLambda = \case
       _ -> Nothing
   _ -> Nothing
 
-instance HasBuiltinConstructor Expr where
+instance HasBuiltinConstructor Expr Expr where
   accessBuiltinC =
     Access
       { getExpr = getBuiltinApp,
         mkExpr = \(b, args) -> normAppList (Builtin mempty b) args
       }
+  exprToThunk = id
 
 --------------------------------------------------------------------------------
 -- DeBruijin substitution

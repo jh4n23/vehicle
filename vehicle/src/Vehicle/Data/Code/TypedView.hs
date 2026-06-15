@@ -37,7 +37,7 @@ import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Data.Builtin.Interface (Accessor (..), BuiltinHasIndexLiterals, BuiltinHasListLiterals, BuiltinHasNatLiterals, BuiltinHasNatType, BuiltinHasTensors)
 import Vehicle.Data.Builtin.Interface.Normalise (EvalSimple, HasTensorLiterals, MonadNormBuiltin, evalCompareRatTensorPointwise, unoptimisedEvalAtTensor)
 import Vehicle.Data.Builtin.Standard.Core
-import Vehicle.Data.Builtin.Standard.Normalise (foldReduceAndComparison)
+import Vehicle.Data.Builtin.Standard.Normalise ()
 import Vehicle.Data.Code.Interface
 import Vehicle.Data.Code.Value
 import Vehicle.Data.Tensor (ExtendedRatTensor, Tensor, pattern ZeroDimTensor)
@@ -248,7 +248,7 @@ toComparison (op, TensorOp2Args dims e1 e2) = case toDimensionsValue dims of
   VDimsCons d ds -> mkExpr accessCompareRatTensorReduced (op, TensorReduceComparisonArgs d ds e1 e2)
   _ -> developerError "Unexpected tensorOp2Args for comparison"
 
-evalCompareRatTensor :: (MonadNormBuiltin m, MonadFreeContext Builtin m, MonadReadableNameContext m) => ComparisonOp -> EvalSimple TensorOp2Args Value Builtin m
+evalCompareRatTensor :: (MonadNormBuiltin m, MonadFreeContext Builtin m, MonadReadableNameContext m) => ComparisonOp -> EvalSimple Value Value TensorOp2Args Builtin m
 evalCompareRatTensor op args@(TensorOp2Args dims e1 e2) = case toDimensionsValue dims of
   VDimsNil -> evalCompareRatTensorPointwise op args
   VDimsCons d ds -> do
@@ -323,6 +323,16 @@ fromBoolTensorValue = \case
   VBoolTensorIf args -> mkExpr accessIf args
   VBoolTensorAt args -> mkExpr accessAtTensor args
   VBoolTensorForeach args -> mkExpr accessForeachTensor args
+
+foldReduceAndComparison ::
+  TensorReductionArgs (Value Builtin) ->
+  Maybe (Value Builtin)
+foldReduceAndComparison (TensorReductionArgs _ tensor) =
+  case getExpr accessCompareRatTensorPointwise tensor of
+    (Just (op, TensorOp2Args (IDimCons d ds) xs ys)) | op /= Ne -> do
+      let compareArgs = TensorReduceComparisonArgs d ds xs ys
+      Just $ mkExpr accessCompareRatTensorReduced (op, compareArgs)
+    _ -> Nothing
 
 -------------------------------------------------------------------------------
 -- Multi-dimensional bool tensor

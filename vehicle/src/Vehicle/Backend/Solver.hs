@@ -118,8 +118,7 @@ compileDecls ::
 compileDecls settings = \case
   [] -> return []
   (d : ds) -> do
-    decl <- evalDecl d
-    property <- case decl of
+    property <- case d of
       DefFunction p ident anns typ body
         | isAnnotatedAsProperty anns ->
             Just <$> do
@@ -130,7 +129,7 @@ compileDecls settings = \case
                 return (name, multiProperty)
       _ -> return Nothing
 
-    addDeclEntryToContext decl $ do
+    addDeclEntryToContext d $ do
       properties <- compileDecls settings ds
       return $ maybeToList property ++ properties
 
@@ -138,14 +137,16 @@ compilePropertyDecl ::
   (MonadStdIO m, MonadCompile m, MonadFreeContext Builtin m) =>
   CompilationSettings ->
   DeclProvenance ->
-  VType Builtin ->
-  Value Builtin ->
+  Type Builtin ->
+  Expr Builtin ->
   m (MultiProperty PropertyAddress)
 compilePropertyDecl settings prov typ body = do
   let compilePropertyFn = compileSingleProperty settings prov
-  logDebug MaxDetail $ prettyFriendlyEmptyCtx typ
-  logDebug MaxDetail $ prettyFriendlyEmptyCtx body
-  errorOrResult <- traverseMultiProperty compilePropertyFn (nameOf prov) typ body
+  normType <- evalInEmptyEnv typ
+  normBody <- evalInEmptyEnv body
+  logDebug MaxDetail $ prettyFriendlyEmptyCtx normType
+  logDebug MaxDetail $ prettyFriendlyEmptyCtx normBody
+  errorOrResult <- traverseMultiProperty compilePropertyFn (nameOf prov) normType normBody
   case errorOrResult of
     Left err -> throwError $ MultiPropertyTraveralError prov err
     Right result -> return result

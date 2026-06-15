@@ -15,6 +15,7 @@ module Vehicle.Compile.Print
     prettyFriendly,
     prettyExternal,
     prettyFriendlyEmptyCtx,
+    prettyExternalEmptyCtx,
   )
 where
 
@@ -27,7 +28,6 @@ import Data.Map (Map)
 import Data.Map qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
-import GHC.Exts qualified as GHC (Constraint)
 import GHC.TypeLits
 import Prettyprinter (fill)
 import Vehicle.Compile.Constants.Rational
@@ -46,6 +46,8 @@ import Vehicle.Data.Bound
 import Vehicle.Data.Builtin.Interface.Print
 import Vehicle.Data.Builtin.Standard.Core
 import Vehicle.Data.Code.BooleanExpr
+import Vehicle.Data.Code.ForcedValue (ForcedValue, UnforcedArg, UnforcedBinder)
+import Vehicle.Data.Code.ForcedValue qualified as Forced
 import Vehicle.Data.Code.LinearExpr
 import Vehicle.Data.Code.Value
 import Vehicle.Data.MaybeTrivial
@@ -85,6 +87,16 @@ prettyFriendlyEmptyCtx ::
   f builtin ->
   Doc b
 prettyFriendlyEmptyCtx x = prettyFriendly (x, emptyNamedCtx)
+
+-- | Prints to the external language for things that need to be displayed to
+--  the user. Should only be used when the bound context is guaranteed to
+-- be empty.
+prettyExternalEmptyCtx ::
+  forall f builtin b.
+  (PrettyExternal (f builtin `In` NamedBoundCtx)) =>
+  f builtin ->
+  Doc b
+prettyExternalEmptyCtx x = prettyExternal (x, emptyNamedCtx)
 
 --------------------------------------------------------------------------------
 -- Printing strategies
@@ -166,8 +178,11 @@ type family ShowStrategy (s :: Strategy) :: Symbol where
 
 -- | A type family you can attach to the instances below to get
 -- a trace of instance resolution printed out.
-type family Debug (strat :: Strategy) (msg :: Symbol) :: GHC.Constraint where
+
+{-
+type family Debug (strat :: Strategy) (msg :: Symbol) where
   Debug strat msg = TypeError ('Text "Debug: " ':<>: 'Text (ShowStrategy strat) ':<>: 'Text msg)
+-}
 
 -- | This type family computes the correct printing strategy given the tags
 -- and the type of the expression.
@@ -211,6 +226,16 @@ type family StrategyFor (tags :: Tags) a :: Strategy where
   StrategyFor ('Unnamed tags) (Value builtin `In` ctx) = 'DescopeNaively (StrategyFor tags (D.Expr Builtin))
   StrategyFor tags (BoundEnv builtin `In` ctx) = StrategyFor tags (Value builtin `In` ctx)
   StrategyFor tags (DimensionedTensorValue builtin `In` ctx) = StrategyFor tags (Value builtin `In` ctx)
+  ------------------
+  -- ForcedValues --
+  ------------------
+  -- To print a `Value` we need to quote it first. Note that we convert it to a `Builtin` representation immediately
+  StrategyFor ('Named tags) (ForcedValue builtin `In` NamedBoundCtx) = 'QuoteValue (StrategyFor ('Named tags) (Expr Builtin `In` NamedBoundCtx))
+  StrategyFor ('Unnamed tags) (ForcedValue builtin `In` ctx) = 'DescopeNaively (StrategyFor tags (D.Expr Builtin))
+  StrategyFor ('Named tags) (Forced.Thunk builtin `In` NamedBoundCtx) = 'QuoteValue (StrategyFor ('Named tags) (Expr Builtin `In` NamedBoundCtx))
+  StrategyFor ('Unnamed tags) (Forced.Thunk builtin `In` ctx) = 'DescopeNaively (StrategyFor tags (D.Expr Builtin))
+  StrategyFor tags (Forced.BoundEnv builtin `In` ctx) = StrategyFor tags (ForcedValue builtin `In` ctx)
+  StrategyFor tags (Forced.DimensionedTensorValue builtin `In` ctx) = StrategyFor tags (ForcedValue builtin `In` ctx)
   -------------------
   -- Context setup --
   -------------------
@@ -465,9 +490,14 @@ instance
   where
   prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeExprNaively e
 
--- Value
+-----------
+-- Value --
+-----------
 
-instance (PrettyUsing rest (D.Expr Builtin), PrintableBuiltin builtin) => PrettyUsing ('DescopeNaively rest) (Value builtin `In` ctx) where
+instance
+  (PrettyUsing rest (D.Expr Builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('DescopeNaively rest) (Value builtin `In` ctx)
+  where
   prettyUsing (e, _ctx) = prettyUsing @rest $ descopeValueNaively @builtin e
 
 instance
@@ -481,24 +511,6 @@ instance
   PrettyUsing ('DescopeNaively rest) (VBinder builtin `In` ctx)
   where
   prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeValueNaively e
-
-instance
-  (PrettyUsing rest (D.Decl Builtin), PrintableBuiltin builtin) =>
-  PrettyUsing ('DescopeNaively rest) (VDecl builtin `In` ctx)
-  where
-  prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeValueNaively e
-
-instance
-  ( PrettyUsing rest (D.Module Builtin),
-    PrintableBuiltin builtin,
-    Debug ('DescopeNaively rest) "Resolve LinearExpr"
-  ) =>
-  PrettyUsing ('DescopeNaively rest) (VProg builtin `In` ctx)
-  where
-  prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeValueNaively e
-
---------------------------------------------------------------------------------
--- Value
 
 instance
   ( PrettyUsing rest (Value builtin `In` ctx),
@@ -526,6 +538,61 @@ instance
   where
   prettyUsing (TensorValue _dims value, ctx) = prettyUsing @rest (value, ctx)
 
+-----------------
+-- ForcedValue --
+-----------------
+
+instance
+  (PrettyUsing rest (D.Expr Builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('DescopeNaively rest) (Forced.Thunk builtin `In` ctx)
+  where
+  prettyUsing (e, _ctx) = prettyUsing @rest $ descopeThunkNaively @builtin e
+
+instance
+  (PrettyUsing rest (D.Expr Builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('DescopeNaively rest) (ForcedValue builtin `In` ctx)
+  where
+  prettyUsing (e, _ctx) = prettyUsing @rest $ descopeForcedValueNaively @builtin e
+
+instance
+  (PrettyUsing rest (D.Arg Builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('DescopeNaively rest) (UnforcedArg builtin `In` ctx)
+  where
+  prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeThunkNaively e
+
+instance
+  (PrettyUsing rest (D.Binder Builtin), PrintableBuiltin builtin) =>
+  PrettyUsing ('DescopeNaively rest) (UnforcedBinder builtin `In` ctx)
+  where
+  prettyUsing (e, _ctx) = prettyUsing @rest $ fmap descopeThunkNaively e
+
+instance
+  ( PrettyUsing rest (Forced.Thunk builtin `In` ctx),
+    PrintableBuiltin builtin
+  ) =>
+  PrettyUsing rest (Forced.BoundEnv builtin `In` ctx)
+  where
+  prettyUsing (Forced.BoundEnv env, ctx) = prettyFlatList $ go env
+    where
+      go :: GenericBoundCtx (GenericBinder (), Forced.Thunk builtin) -> [Doc a]
+      go = \case
+        [] -> []
+        (binder, value) : rs -> do
+          let valueDoc = goEntry value
+          (pretty (nameOf binder) <+> "=" <+> valueDoc) : go rs
+
+      goEntry :: Forced.Thunk builtin -> Doc a
+      goEntry v = prettyUsing @rest (v, ctx)
+
+instance
+  ( PrettyUsing rest (Forced.Thunk builtin `In` ctx),
+    PrintableBuiltin builtin
+  ) =>
+  PrettyUsing rest (Forced.DimensionedTensorValue builtin `In` ctx)
+  where
+  prettyUsing (Forced.TensorValue _dims value, ctx) = prettyUsing @rest (value, ctx)
+
+--------------------------------------------------------------------------------
 -- Linear expression
 
 instance
@@ -668,12 +735,10 @@ instance
   where
   prettyUsing (e, ()) = prettyUsing @rest $ mapModuleDecls descopeDecl e
 
--- Value
-
 -- LinearExpr
 
 instance
-  (VariableLike variable, ConstantLike constant, PrettyUsing rest (constant `In` NamedBoundCtx)) =>
+  (VariableLike variable, PrettyUsing rest (constant `In` NamedBoundCtx)) =>
   PrettyUsing ('DescopeWithNames rest) (LinearExpr variable constant `In` NamedBoundCtx)
   where
   prettyUsing (lexp, ctx) = prettyLinearExpr prettyVar prettyConst lexp
@@ -766,17 +831,43 @@ instance
   prettyUsing e = prettyUsing @rest $ fmap (unnormalise @(Value builtin) @(Expr Builtin) 0) e
 
 instance
-  (PrettyUsing rest (Decl Builtin), ConvertableBuiltin builtin Builtin) =>
-  PrettyUsing ('QuoteValue rest) (VDecl builtin)
-  where
-  prettyUsing e = prettyUsing @rest $ fmap (unnormalise @(Value builtin) @(Expr Builtin) 0) e
-
-instance
   (PrettyUsing rest (Expr Builtin `In` NamedBoundCtx), ConvertableBuiltin builtin Builtin) =>
   PrettyUsing ('QuoteValue rest) (Value builtin `In` NamedBoundCtx)
   where
   prettyUsing (e, ctx) = do
     let e' = unnormalise @(Value builtin) @(Expr Builtin) (Lv $ length ctx) e
+    prettyUsing @rest (e', ctx)
+
+instance
+  (PrettyUsing rest (Arg Builtin), ConvertableBuiltin builtin Builtin) =>
+  PrettyUsing ('QuoteValue rest) (UnforcedArg builtin)
+  where
+  prettyUsing e =
+    prettyUsing @rest $
+      fmap (unnormalise @(Forced.Thunk builtin) @(Expr Builtin) 0) e
+
+instance
+  (PrettyUsing rest (Binder Builtin), ConvertableBuiltin builtin Builtin) =>
+  PrettyUsing ('QuoteValue rest) (UnforcedBinder builtin)
+  where
+  prettyUsing e =
+    prettyUsing @rest $
+      fmap (unnormalise @(Forced.Thunk builtin) @(Expr Builtin) 0) e
+
+instance
+  (PrettyUsing rest (Expr Builtin `In` NamedBoundCtx), ConvertableBuiltin builtin Builtin) =>
+  PrettyUsing ('QuoteValue rest) (ForcedValue builtin `In` NamedBoundCtx)
+  where
+  prettyUsing (e, ctx) = do
+    let e' = unnormalise @(ForcedValue builtin) @(Expr Builtin) (Lv $ length ctx) e
+    prettyUsing @rest (e', ctx)
+
+instance
+  (PrettyUsing rest (Expr Builtin `In` NamedBoundCtx), ConvertableBuiltin builtin Builtin) =>
+  PrettyUsing ('QuoteValue rest) (Forced.Thunk builtin `In` NamedBoundCtx)
+  where
+  prettyUsing (e, ctx) = do
+    let e' = unnormalise @(Forced.Thunk builtin) @(Expr Builtin) (Lv $ length ctx) e
     prettyUsing @rest (e', ctx)
 
 instance

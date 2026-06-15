@@ -1,5 +1,6 @@
 module Vehicle.Data.Builtin.Interface where
 
+import Control.Monad ((<=<))
 import Vehicle.Data.Builtin.Core
 import Vehicle.Data.Tensor (BoolTensor, ExtendedRatTensor, NatTensor)
 
@@ -24,6 +25,13 @@ data Accessor expr v = Access
   { getExpr :: Destruct expr v,
     mkExpr :: Construct expr v
   }
+
+applyAccessor :: (Eq op) => Accessor expr (op, x) -> op -> Accessor expr x
+applyAccessor accessor op =
+  Access
+    { getExpr = (\(op1, x) -> if op1 == op then Just x else Nothing) <=< getExpr accessor,
+      mkExpr = \v -> mkExpr accessor (op, v)
+    }
 
 --------------------------------------------------------------------------------
 -- Accessor classes for builtins

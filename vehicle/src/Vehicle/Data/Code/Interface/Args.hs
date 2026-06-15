@@ -6,6 +6,7 @@ module Vehicle.Data.Code.Interface.Args where
 import Data.Hashable (Hashable)
 import GHC.Generics (Generic)
 import Vehicle.Data.Builtin.Interface
+import Vehicle.Data.Variable.Bound.Level (Lv)
 import Vehicle.Prelude
 
 --------------------------------------------------------------------------------
@@ -15,8 +16,9 @@ import Vehicle.Prelude
 class IsArgs args where
   accessSpine :: Accessor [GenericArg expr] (args expr)
 
-class HasLambdaConstructor expr exprLamBody where
-  accessLamC :: Accessor (expr builtin) (GenericBinder (expr builtin), exprLamBody builtin)
+class HasLambdaConstructor expr thunk closure | expr -> thunk, thunk -> expr, thunk -> closure where
+  accessForcedLamC :: Accessor (thunk builtin) (GenericBinder (thunk builtin), closure builtin)
+  accessBoundVarC :: Accessor (expr builtin) (Lv, [GenericArg (thunk builtin)])
 
 --------------------------------------------------------------------------------
 -- Op1Args
@@ -458,8 +460,8 @@ instance IsArgs FoldListArgs where
 
 -- | Arguments for `VectorToList`
 data VectorToListArgs expr = VectorToListArgs
-  { vectorToListElementType :: GenericArg expr,
-    vectorToListSize :: GenericArg expr,
+  { vectorToListElementType :: expr,
+    vectorToListSize :: expr,
     vectorToListArgs :: [expr]
   }
 
@@ -467,9 +469,9 @@ instance IsArgs VectorToListArgs where
   accessSpine =
     Access
       { getExpr = \case
-          t : n : xs -> Just $ VectorToListArgs t n (fmap argExpr xs)
+          t : n : xs -> Just $ VectorToListArgs (argExpr t) (argExpr n) (fmap argExpr xs)
           _ -> Nothing,
-        mkExpr = \(VectorToListArgs t n xs) -> t : n : fmap explicit xs
+        mkExpr = \(VectorToListArgs t n xs) -> implicit t : implicit n : fmap explicit xs
       }
 
 -- | Arguments for `Iterate`
@@ -514,18 +516,18 @@ data QuantifyRatTensorArgs expr body = QuantifyRatTensorArgs
   }
 
 accessQuantifyRatTensorSpine ::
-  (HasLambdaConstructor expr body) =>
-  Accessor [GenericArg (expr builtin)] (QuantifyRatTensorArgs (expr builtin) (body builtin))
+  (HasLambdaConstructor expr thunk closure) =>
+  Accessor [GenericArg (thunk builtin)] (QuantifyRatTensorArgs (thunk builtin) (closure builtin))
 accessQuantifyRatTensorSpine =
   Access
     { getExpr = \case
-        (fmap argExpr -> [dims, fn]) -> case getExpr accessLamC fn of
+        (fmap argExpr -> [dims, fn]) -> case getExpr accessForcedLamC fn of
           Just (binder, body) -> Just (QuantifyRatTensorArgs dims binder body)
           _ -> Nothing
         _ -> Nothing,
       mkExpr = \(QuantifyRatTensorArgs dims binder body) ->
         [ implicitIrrelevant dims,
-          explicit (mkExpr accessLamC (binder, body))
+          explicit (mkExpr accessForcedLamC (binder, body))
         ]
     }
 
@@ -537,18 +539,18 @@ data QuantifyRecordArgs expr body = QuantifyRecordArgs
   }
 
 accessQuantifyRecordSpine ::
-  (HasLambdaConstructor expr body) =>
-  Accessor [GenericArg (expr builtin)] (QuantifyRecordArgs (expr builtin) (body builtin))
+  (HasLambdaConstructor expr thunk closure) =>
+  Accessor [GenericArg (thunk builtin)] (QuantifyRecordArgs (thunk builtin) (closure builtin))
 accessQuantifyRecordSpine =
   Access
     { getExpr = \case
-        (fmap argExpr -> [typ, fn]) -> case getExpr accessLamC fn of
+        (fmap argExpr -> [typ, fn]) -> case getExpr accessForcedLamC fn of
           Just (binder, body) -> Just (QuantifyRecordArgs typ binder body)
           _ -> Nothing
         _ -> Nothing,
       mkExpr = \(QuantifyRecordArgs dims binder body) ->
         [ implicitIrrelevant dims,
-          explicit (mkExpr accessLamC (binder, body))
+          explicit (mkExpr accessForcedLamC (binder, body))
         ]
     }
 

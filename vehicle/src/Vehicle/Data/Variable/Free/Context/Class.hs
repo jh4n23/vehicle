@@ -7,9 +7,9 @@ import Control.Monad.State (StateT (..), mapStateT)
 import Control.Monad.Trans.Maybe (MaybeT, mapMaybeT)
 import Control.Monad.Writer
 import Data.Data (Proxy (..))
+import GHC.Stack (HasCallStack)
 import Vehicle.Compile.Prelude
 import Vehicle.Data.Builtin.Interface.Print
-import Vehicle.Data.Code.Value
 import Vehicle.Data.Variable.Bound.Context.Generic
 import Vehicle.Data.Variable.Bound.Context.Name.Instance
 import Vehicle.Data.Variable.Bound.Context.Tensor.Instance
@@ -27,7 +27,7 @@ class (PrintableBuiltin builtin, MonadLogger m) => MonadFreeContext builtin m wh
   getFreeCtx :: Proxy builtin -> m (FreeCtx builtin)
 
   -- | Lookup the decl for a particular identifier entry
-  getDeclEntry :: Proxy builtin -> Identifier -> m (FreeCtxEntry builtin)
+  getDeclEntry :: (HasCallStack) => Proxy builtin -> Identifier -> m (FreeCtxEntry builtin)
 
 instance (Monoid w, MonadFreeContext builtin m) => MonadFreeContext builtin (WriterT w m) where
   addDeclEntryToContext = mapWriterT . addDeclEntryToContext
@@ -85,7 +85,7 @@ instance (MonadFreeContext builtin m) => MonadFreeContext builtin (MaybeT m) whe
 getFreeEnv ::
   forall builtin m.
   (MonadFreeContext builtin m) =>
-  m (FreeEnv builtin)
+  m (FreeCtx builtin)
 getFreeEnv = do
   ctx <- getFreeCtx (Proxy @builtin)
   return ctx

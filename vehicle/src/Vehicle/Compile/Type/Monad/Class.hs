@@ -31,7 +31,6 @@ import Vehicle.Compile.Type.Meta.Substitution as MetaSubstitution (MetaSubstitut
 import Vehicle.Data.Builtin.Interface.Normalise (NormalisableBuiltin)
 import Vehicle.Data.Builtin.Interface.Print
 import Vehicle.Data.Code.ModuleInterface
-import Vehicle.Data.Code.Value (FreeEnv)
 import Vehicle.Data.Variable.Bound.Context.Generic
 import Vehicle.Data.Variable.Bound.Context.Name
 import Vehicle.Data.Variable.Free.Context (addDeclToContext)
@@ -110,7 +109,7 @@ data TypeCheckerState builtin = TypeCheckerState
   { importedModules :: ImportedModuleContext builtin,
     currentModuleInterface :: ModuleTypingInterface builtin,
     declsByName :: Map Identifier (Decl builtin),
-    currentFreeEnv :: FreeEnv builtin,
+    currentFreeCtx :: FreeCtx builtin,
     currentDeclState :: TypeCheckerDeclState builtin
   }
 
@@ -125,7 +124,7 @@ emptyTypeCheckerState instanceDatabase importedModules = do
   TypeCheckerState
     { importedModules = importedModules,
       currentModuleInterface = emptyModuleTypingInterface {instanceDatabase = instanceDatabase},
-      currentFreeEnv = mergeImportedFreeEnvs importedModules,
+      currentFreeCtx = mergeImportedFreeCtxs importedModules,
       declsByName = importedDeclsByName,
       currentDeclState = emptyTypeCheckerDeclState
     }

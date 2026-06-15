@@ -1,6 +1,5 @@
 module Vehicle.Compile.Normalise.NBE
   ( MonadNorm,
-    FreeEnv,
     normalise,
     normaliseInEmptyFreeEnv,
     normaliseAppInEmptyFreeEnv,
@@ -10,7 +9,6 @@ module Vehicle.Compile.Normalise.NBE
     evalRecordAcc,
     normaliseClosure,
     normaliseClosureInCtx,
-    evalDecl,
     eval,
     evalInEmptyEnv,
     evalApp,
@@ -124,45 +122,11 @@ type MonadNorm builtin m =
     PrintableBuiltin builtin
   )
 
-evalDecl ::
-  (MonadNorm builtin m, MonadFreeContext builtin m) =>
-  Decl builtin ->
-  m (VDecl builtin)
-evalDecl d = case d of
-  DefAbstract {} -> traverse evalInEmptyEnv d
-  DefFunction {} -> traverse evalInEmptyEnv d
-  DefRecord p ident sort telescope fields supportedOps -> do
-    (telescope', fields') <- evalRecordDef (telescope, fields)
-    return $ DefRecord p ident sort telescope' fields' supportedOps
-
 evalInEmptyEnv ::
   (MonadNorm builtin m, MonadFreeContext builtin m) =>
   Expr builtin ->
   m (Value builtin)
 evalInEmptyEnv = eval mempty emptyBoundEnv
-
-evalRecordDef ::
-  forall builtin m.
-  (MonadNorm builtin m, MonadFreeContext builtin m) =>
-  (Telescope builtin, RecordFields builtin) ->
-  m (VTelescope builtin, GenericRecordFields (Value builtin))
-evalRecordDef = go mempty emptyBoundEnv
-  where
-    go ::
-      NamedBoundCtx ->
-      BoundEnv builtin ->
-      (Telescope builtin, RecordFields builtin) ->
-      m (VTelescope builtin, GenericRecordFields (Value builtin))
-    go ctx boundEnv (telescope, fields) = case telescope of
-      binder : binders -> do
-        binder' <- traverse (eval ctx boundEnv) binder
-        let newEnv = extendEnvWithBound (boundCtxLv ctx) binder boundEnv
-        let newCtx = nameOf binder : ctx
-        (binders', fields') <- go newCtx newEnv (binders, fields)
-        return (binder' : binders', fields')
-      [] -> do
-        fields' <- traverseRecordFields (eval ctx boundEnv) fields
-        return ([], fields')
 
 evalRecordAcc ::
   (MonadNorm builtin m, MonadFreeContext builtin m) =>
@@ -266,12 +230,12 @@ evalBuiltin ctx b spine
       (inst, remainingArgs) <- findInstanceArg b spine
       evalApp ctx inst remainingArgs
 
-lookupIdentValue :: forall builtin m. (MonadFreeContext builtin m) => Identifier -> m (Value builtin)
+lookupIdentValue :: forall builtin m. (MonadFreeContext builtin m, NormalisableBuiltin builtin) => Identifier -> m (Value builtin)
 lookupIdentValue ident = do
   decl <- getDeclEntry (Proxy @builtin) ident
-  return $ case decl of
-    DefFunction _ _ _ _ value -> value
-    _ -> VFreeVar ident []
+  case decl of
+    DefFunction _ _ _ _ value -> evalInEmptyEnv value
+    _ -> return $ VFreeVar ident []
 
 findInstanceArg :: (MonadLogger m, Show op) => op -> [GenericArg a] -> m (a, [GenericArg a])
 findInstanceArg op = \case
