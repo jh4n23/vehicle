@@ -574,7 +574,7 @@ toRatTensorValueFromBuiltin b spine = case VBuiltin b spine of
   (getExpr accessAtTensor -> Just args) -> VRatAtTensor args
   (getExpr accessAtVector -> Just args) -> VRatAtVector args
   (getExpr accessForeachTensor -> Just args) -> VRatForeach args
-  _ -> developerError $ "ill-typed RatTensor builtin:" <+> pretty b
+  _ -> developerError $ "ill-typed RatTensor builtin:" <+> prettyVerbose (VBuiltin b spine)
 
 toRatTensorValue :: ForcedValue Builtin -> RatTensorValue
 toRatTensorValue = \case

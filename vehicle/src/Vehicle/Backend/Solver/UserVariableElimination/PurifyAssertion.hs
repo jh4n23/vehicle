@@ -81,14 +81,14 @@ purifyRatTensorExpr actions@UnblockingActions {..} incrDims value = do
     VReduceMulRatTensor args -> unblockReduceTensor (recPurify (incrDims + 1)) (forceEval evalReduceMulRatTensor) args
     VReduceMinRatTensor args -> unblockReduceTensor (recPurify (incrDims + 1)) (forceEval evalReduceMinRatTensor) args
     VReduceMaxRatTensor args -> unblockReduceTensor (recPurify (incrDims + 1)) (forceEval evalReduceMaxRatTensor) args
-    VRatAtTensor args -> unblockAtTensor (recPurify (incrDims + 1)) (recPurify incrDims) args
+    VRatAtTensor args -> unblockAtTensor (recPurify (incrDims + 1)) (unblockIndexValue actions) args
     VRatForeach args -> unblockForeachTensor args
     VRatTensorBoundVar v
       | incrDims == 0 -> return $ IfLeaf $ Forced $ VBoundVar v []
       | otherwise -> recPurify incrDims =<< unblockRatTensorBoundVar v
     VNetworkApplication n args -> unblockNetworkApp (recPurify incrDims) (unblockRecordValue actions) n args
     VRatTensorRecordAcc typ record fieldName spine -> unblockRecordAcc actions typ record fieldName spine
-    VRatAtVector args -> unblockAtVector (recPurify (incrDims + 1)) (recPurify incrDims) args
+    VRatAtVector args -> unblockAtVector (recPurify (incrDims + 1)) (unblockIndexValue actions) args
     VParameterOrDataset {} -> developerError "datasets and parameters should have been eliminated"
   where
     recPurify = purifyRatTensorExpr actions

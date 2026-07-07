@@ -4,6 +4,7 @@ module Vehicle.Compile.Unblock
     OperationUnblockingFunction,
     TypeUnblockingFunction,
     unblockRatTensorValue,
+    unblockIndexValue,
     unblockRecordValue,
     unblockIf,
     unblockAtTensor,

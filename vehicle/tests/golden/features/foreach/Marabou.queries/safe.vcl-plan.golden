@@ -67,19 +67,15 @@
                       {
                         "nestedTensorShape": {
                           "tag": "UniModal",
-                          "contents": [
-                            2
-                          ]
+                          "contents": []
                         },
-                        "nestedStartingVariable": 0
+                        "nestedStartingVariable": 2
                       },
                       {
                         "constantValue": {
                           "tag": "ConstantTensor",
                           "contents": [
-                            [
-                              2
-                            ],
+                            [],
                             {
                               "numerator": -4,
                               "denominator": 1
@@ -88,7 +84,7 @@
                         },
                         "coefficients": [
                           [
-                            3,
+                            5,
                             {
                               "numerator": 1,
                               "denominator": 1
@@ -96,6 +92,54 @@
                           ]
                         ]
                       }
+                    ]
+                  },
+                  {
+                    "tag": "SolveEquality",
+                    "contents": [
+                      {
+                        "nestedTensorShape": {
+                          "tag": "UniModal",
+                          "contents": []
+                        },
+                        "nestedStartingVariable": 1
+                      },
+                      {
+                        "constantValue": {
+                          "tag": "ConstantTensor",
+                          "contents": [
+                            [],
+                            {
+                              "numerator": -4,
+                              "denominator": 1
+                            }
+                          ]
+                        },
+                        "coefficients": [
+                          [
+                            4,
+                            {
+                              "numerator": 1,
+                              "denominator": 1
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "tag": "ReconstructTensorVariable",
+                    "contents": [
+                      {
+                        "nestedTensorShape": {
+                          "tag": "UniModal",
+                          "contents": [
+                            2
+                          ]
+                        },
+                        "nestedStartingVariable": 0
+                      },
+                      "OneDimension"
                     ]
                   }
                 ]
