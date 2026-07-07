@@ -17,6 +17,7 @@ import Vehicle.Backend.Solver.QueryCompilation.Core (MonadQueryCompilation)
 import Vehicle.Backend.Solver.UserVariableElimination.Core
 import Vehicle.Compile.Constants.Rational
 import Vehicle.Compile.Error
+import Vehicle.Compile.ExpandResources.Core (lookupNetworkInfo)
 import Vehicle.Compile.Normalise.Quote (Quote (..))
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Resource (NetworkModality (..), NetworkName)
@@ -30,10 +31,9 @@ import Vehicle.Data.Variable.Bound.Context.Name
 import Vehicle.Data.Variable.Bound.Context.Tensor.Class (MonadReadableTensorBoundContext, getCompleteNamedCtx, lookupParentTensorVariable)
 import Vehicle.Data.Variable.Bound.Level
 import Vehicle.Prelude.Warning (CompileWarning (..))
+import Vehicle.Verify.Core (inputShape)
 import Vehicle.Verify.QueryFormat.Core (QueryFormatID (..))
 import Vehicle.Verify.QueryFormat.Interface (QueryFormat (..))
-import Vehicle.Compile.ExpandResources.Core (lookupNetworkInfo)
-import Vehicle.Verify.Core (inputShape)
 
 --------------------------------------------------------------------------------
 -- Interface
@@ -186,7 +186,7 @@ checkAllBoundsPresent (Partial allPartialbounds assertions) = do
   lv <- getBinderDepth
 
   errorsAndFinalBounds <- forM (Map.toList inputVariableMapping) $ \(var, (networkName, appInfo, varShape)) -> do
-    let errorCase indices = return $ Left (networkName, inputValue appInfo, findUnboundedVariables lv appInfo, indices)
+    let errorCase indices = return $ Left (networkName, inputType appInfo, inputValue appInfo, findUnboundedVariables lv appInfo, indices)
     case Map.lookup var allPartialbounds of
       Nothing -> errorCase wholeTensorUnbounded
       Just partialBounds -> do

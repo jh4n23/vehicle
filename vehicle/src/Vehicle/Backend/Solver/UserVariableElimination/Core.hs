@@ -17,7 +17,7 @@ import Vehicle.Compile.Constants.Rational
 import Vehicle.Compile.Error
 import Vehicle.Compile.ExpandResources.Core
 import Vehicle.Compile.Prelude
-import Vehicle.Compile.Resource (NetworkModality, NetworkName)
+import Vehicle.Compile.Resource (NetworkIOType, NetworkModality, NetworkName, networkInputType)
 import Vehicle.Data.Assertion
 import Vehicle.Data.Bound (BoundedValue, Domain)
 import Vehicle.Data.Builtin.Standard
@@ -54,7 +54,7 @@ data PropertyMetaData = PropertyMetaData
 data NetworkApplicationInfo = NetworkApplicationInfo
   { inputVariable :: NetworkInputTensorVariable,
     outputVariable :: NetworkOutputTensorVariable,
-    inputType :: UnforcedType Builtin,
+    inputType :: NetworkIOType,
     inputValue :: Thunk Builtin
   }
 
@@ -152,7 +152,8 @@ addNetworkApplicationToGlobalCtx name networkInfo arg = do
         NetworkApplicationInfo
           { inputVariable = coerce inputVar,
             outputVariable = coerce outputVar,
-            inputValue = arg
+            inputValue = arg,
+            inputType = networkInputType $ networkType networkInfo
           }
 
   -- Update the global context

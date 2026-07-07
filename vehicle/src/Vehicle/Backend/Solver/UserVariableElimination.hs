@@ -32,6 +32,7 @@ import Vehicle.Compile.Normalise.TypedValueForced
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyVerbose)
 import Vehicle.Compile.Resource
+import Vehicle.Compile.Scope.Records (constructFromTensorFreeVar, constructToTensorFreeVar)
 import Vehicle.Compile.Unblock (OperationUnblockingFunction, TypeUnblockingFunction, UnblockingActions (..))
 import Vehicle.Compile.Unblock qualified as Unblocking
 import Vehicle.Compile.Variable (createUserVar)
@@ -49,7 +50,6 @@ import Vehicle.Verify.Core
 import Vehicle.Verify.QueryFormat (QueryFormat (..), supportsStrictInequalities)
 import Vehicle.Verify.Specification (CompilationStep (..))
 import Prelude hiding (Applicative (..))
-import Vehicle.Compile.Scope.Records (constructFromTensorFreeVar, constructToTensorFreeVar)
 
 eliminateExistsRecord ::
   (MonadQueryStructure m) =>
@@ -81,14 +81,14 @@ wrapQuantifyRecord QuantifyRecordArgs {..} = do
     _ -> developerError "Record binder is not of expected format."
 
   -- Construct \r -> body from binder and body in record quantifier args
-  recordQLam <- unnormalise (boundCtxLv namedCtx) $ VLam quantifyRecordBinder quantifyRecordBody
+  let recordQLam = unnormalise (boundCtxLv namedCtx) $ VLam quantifyRecordBinder quantifyRecordBody
   fields <- getRecordFields recordTypeIdent
   shape <- getTensorRecordShape fields
   let dims = Forced $ mkDims shape
 
   -- Build tensor binder with appropriate dims and type for record
   let Closure boundEnv _body = quantifyRecordBody
-  let tensorType = Forced $ ITensorType IRatType dims
+  let tensorType = Forced $ ITensorType (Forced IRatType) dims
   let tensorBinderName = getFreshTensorBinderName namedCtx
   let tensorBinder = mkExplicitBinder tensorType (Just (mempty, tensorBinderName))
 
@@ -214,7 +214,7 @@ purifyAndCompileAssertion op args
     elimBranch :: (MonadQuantifierBody m) => Thunk Builtin -> MaybeTrivial Partitions -> MaybeTrivial Partitions -> m (MaybeTrivial Partitions)
     elimBranch c x y = do
       c' <- compileBoolExpr c
-      notC' <- compileBoolExpr (Forced $ mkExpr accessNotTensor $ TensorOp1Args IDimNil c)
+      notC' <- compileBoolExpr (Forced $ mkExpr accessNotTensor $ TensorOp1Args (Forced IDimNil) c)
       let cAndx = andTrivial andPartitions c' x
       let notCAndy = andTrivial andPartitions notC' y
       return $ orTrivial orPartitions cAndx notCAndy
@@ -238,7 +238,7 @@ compilePurifiedAssertion (op, args@(TensorOp2Args dims xs ys)) = do
     Left (UnexpectedExpr e) ->
       developerError ("unexpected expression" <+> prettyVerbose e)
     Left (TrivialExpr b) ->
-      return $ Left $ IBoolLiteral b
+      return $ Left $ Forced $ IBoolLiteral b
     Left (UnreducedExpr e) -> do
       logDebugM MaxDetail $ do
         exprDoc <- prettyFriendlyInCtx e
@@ -296,7 +296,7 @@ unblockNetworkApplication unblockFnTensor unblockFnRecord ident (NetworkAppArgs 
   -- If our network outputs a tensorisable, convert our output expression to a record
   transformedOutputVarExpr <- case networkOutputType typ of
     UniModal (RecordIOType (NetworkRecordType _ recordTyp _ _)) -> do
-      forceFreeVar (constructFromTensorFreeVar recordTyp) [explicit outputVarExpr]
+      Forced <$> forceFreeVar (constructFromTensorFreeVar recordTyp) [explicit outputVarExpr]
     MultiModal _ -> error "Multimodal IO is not implemented yet"
     _ -> return outputVarExpr
 
@@ -304,21 +304,21 @@ unblockNetworkApplication unblockFnTensor unblockFnRecord ident (NetworkAppArgs 
   -- If our network input is a tensorisable, i.e. arg is tensorisable, convert it to a tensor
   transformedArg <- case networkInputType typ of
     UniModal (RecordIOType (NetworkRecordType _ recordTyp _ _)) -> do
-      forceFreeVar (constructToTensorFreeVar recordTyp) [explicit arg]
+      Forced <$> forceFreeVar (constructToTensorFreeVar recordTyp) [explicit arg]
     MultiModal _ -> error "Multimodal IO is not implemented yet"
     _ -> return arg
 
-  let inputEquality = case inputShape networkInfo of
-        MultiModal _ -> error "MultiModal IO is not implemented yet"
-        UniModal shape ->
-          mkExpr accessCompareRatTensorReduced
-            ( Eq,
-              TensorOp2Args
-                { tensorOp2Dims = mkDims (inputShape networkInfo),
-                  tensorOp2Arg1 = inputVarExpr,
-                  tensorOp2Arg2 = transformedArg
-                }
-            )
+  inputEquality <- case inputShape networkInfo of
+    MultiModal _ -> error "MultiModal IO is not implemented yet"
+    UniModal dims ->
+      toComparison
+        ( Eq,
+          TensorOp2Args
+            { tensorOp2Dims = Forced $ mkDims dims,
+              tensorOp2Arg1 = inputVarExpr,
+              tensorOp2Arg2 = transformedArg
+            }
+        )
 
   tell [inputEquality]
 
@@ -348,8 +348,8 @@ eliminateNotEqualRatTensor args@(TensorOp2Args dims _ _) = do
   if supportsStrictInequalities queryFormat
     then throwError $ UnsupportedInequality (queryFormatID queryFormat) propertyProvenance
     else do
-      let leq = fromBoolValue $ VCompareRatTensor (Le, args)
-      let geq = fromBoolValue $ VCompareRatTensor (Ge, args)
+      leq <- toComparison (Le, args)
+      geq <- toComparison (Ge, args)
       return $ Forced $ mkExpr accessOrTensor $ TensorOp2Args dims leq geq
 
 eliminateTensorAssertion ::
@@ -363,21 +363,36 @@ eliminateTensorAssertion op (TensorOp2Args dims xs ys) = do
   case forcedDims of
     IDimNil -> do
       -- For scalar comparisons, directly apply the comparison
-      evalCompareRatTensor op (TensorOp2Args (Forced forcedDims) xs ys)
-    IDimCons d@(INatLiteral n) ds -> do
-      -- TODO switch to use `etaReduceTensor`?
-      let tElem = Forced IRatType
-      let d0Arg = mkDims []
-      let mkAt vs i = evalAtTensor (AtTensorArgs tElem d ds vs (IIndexLiteral i d))
-      let mkStackElement i = do
-            xsi <- mkAt xs i
-            ysi <- mkAt ys i
-            evalCompareRatTensor op (TensorOp2Args ds xsi ysi)
-      stackElements <- traverse mkStackElement [0 .. (n - 1)] :: m [Thunk Builtin]
-      let stackExpr = mkExpr accessStackTensor (StackTensorArgs (Forced IBoolType) d d0Arg stackElements)
-      result <- unoptimisedEvalReduceAndTensor (TensorReductionArgs (mkDims [n]) stackExpr)
-      return result
+      toComparison (op, TensorOp2Args (Forced forcedDims) xs ys)
+    IDimCons d ds -> do
+      forcedDim <- forceThunk @Builtin @m @(ForcedValue Builtin) d
+      case forcedDim of
+        INatLiteral n -> do
+          -- TODO switch to use `etaReduceTensor`?
+          let tElem = Forced IRatType
+          let d0Arg = Forced IDimNil
+          let mkAt vs i = Forced $ mkExpr accessAtTensor (AtTensorArgs tElem d ds vs (Forced $ IIndexLiteral i d))
+          let mkStackElement i = do
+                let xsi = mkAt xs i
+                let ysi = mkAt ys i
+                toComparison (op, TensorOp2Args ds xsi ysi)
+          stackElements <- traverse mkStackElement [0 .. (n - 1)] :: m [Thunk Builtin]
+          let stackExpr = Forced $ mkExpr accessStackTensor (StackTensorArgs (Forced IBoolType) d d0Arg stackElements)
+          let result = Forced $ mkExpr accessReduceAnd (TensorReductionArgs (Forced $ mkDims [n]) stackExpr)
+          return result
+        _ -> compilerDeveloperError ("unexpected dimension" <+> prettyVerbose d)
     _ -> compilerDeveloperError ("unexpected dimensions" <+> prettyVerbose dims)
+
+toComparison ::
+  (MonadNorm Builtin m) =>
+  (ComparisonOp, TensorOp2Args (Thunk Builtin)) ->
+  m (Thunk Builtin)
+toComparison args@(op, TensorOp2Args dims xs ys) = do
+  forcedDims <- forceThunk dims
+  case forcedDims of
+    IDimNil -> return $ Forced $ mkExpr accessCompareRatTensorPointwise args
+    IDimCons d ds -> return $ Forced $ mkExpr accessCompareRatTensorReduced (op, TensorReduceComparisonArgs d ds xs ys)
+    _ -> developerError "Unexpected dims"
 
 networkEqualitiesToPartition ::
   (MonadQueryStructure m) =>

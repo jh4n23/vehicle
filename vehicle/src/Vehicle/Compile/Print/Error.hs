@@ -10,7 +10,6 @@ where
 import Control.Monad.Except (ExceptT, runExceptT)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
-import Data.Map.Ordered qualified as OMap
 import Data.These (mergeTheseWith)
 import Prettyprinter (surround)
 import System.FilePath
@@ -19,6 +18,7 @@ import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print
 import Vehicle.Compile.Print.Error.Property (propertyTraversalErrorDetails)
 import Vehicle.Compile.Print.Error.Typing
+import Vehicle.Compile.Resource (NetworkIOBase (..), NetworkModality (..), NetworkRecordType (..))
 import Vehicle.Data.Builtin.Interface.Normalise (getDimsExprs)
 import Vehicle.Data.Builtin.Linearity
 import Vehicle.Data.Builtin.Polarity
@@ -928,7 +928,7 @@ formatCompileError = \case
         problem = multipleNetworkErrorMessages (pretty queryFormat) ctx apps,
         fix = Just "this is on our road map to fix with VNNLib 2.0, but please open an issue on the Issue tracker with your use-case."
       }
-  UnboundedNetworkInputVariables (ident, p) ctx ((networkName, inputValue, userVariables, unboundedInputs) :| _) ->
+  UnboundedNetworkInputVariables (ident, p) ctx ((networkName, inputType, inputValue, userVariables, unboundedInputs) :| _) ->
     VehicleUserError
       { provenance = Just p,
         problem =
@@ -945,27 +945,24 @@ formatCompileError = \case
       }
     where
       unboundedVarInfo =
-        case inputValue of
-          VRecord recordType fields -> do
+        case inputType of
+          UniModal (RecordIOType (NetworkRecordType _ recordTypeIdent _ fieldNames)) -> do
             let varName = "x" :: Name
-            let fieldNames = fmap (\(FieldName _p name, _v) -> name) (OMap.assocs fields)
-            let typeIdent = case recordType of
-                  (VFreeVar i _) -> Just i
-                  _ -> Nothing
             pretty varName
               <> line
               <> "In particular,"
                 <+> missingBoundsRecord varName fieldNames unboundedInputs
                 <+> "for"
-                <+> maybe mempty (\t -> pretty $ nameOf t) typeIdent
+                <+> pretty (nameOf recordTypeIdent)
                 <+> squotes (pretty varName)
-          _ ->
+          UniModal _ ->
             lineIndent (prettyFriendly (WithContext (Forced.VFreeVar (Identifier userModulePath networkName) [explicit inputValue]) ctx))
               <> line
               <> "In particular,"
                 <+> missingBounds unboundedInputs
                 <+> "for tensor"
                 <+> squotes (prettyFriendly (WithContext inputValue ctx))
+          MultiModal _ -> developerError "MultiModal IO is not implmeneted yet"
   UnknownDifferentiableLogic name possibleNames ->
     VehicleUserError
       { provenance = Nothing,

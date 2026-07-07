@@ -145,14 +145,14 @@ compilePropertyDecl settings prov typ body = do
   let compilePropertyFn = compileSingleProperty settings prov
   let normType = Unforced emptyBoundEnv typ
   let normBody = Unforced emptyBoundEnv body
-  errorOrResult <- traverseMultiProperty compilePropertyFn (nameOf prov) normType normBody
+  errorOrResult <- runFreshTensorBoundContextT $ traverseMultiProperty compilePropertyFn (nameOf prov) normType normBody
   case errorOrResult of
     Left err -> throwError $ MultiPropertyTraveralError prov err
     Right result -> return result
 
 -- Compiles an individual property of type `Bool`
 compileSingleProperty ::
-  (MonadStdIO m, MonadCompile m, MonadFreeContext Builtin m) =>
+  (MonadStdIO m, MonadCompile m, MonadFreeContext Builtin m, MonadTensorBoundContext m) =>
   CompilationSettings ->
   DeclProvenance ->
   PropertyAddress ->
@@ -169,9 +169,8 @@ compileSingleProperty CompilationSettings {..} prov propertyAddress expr =
 
     queries <-
       flip runReaderT propertyMetaData $
-        runFreshTensorBoundContextT $
-          runSupplyT [1 :: QueryID ..] $
-            compileQueries expr
+        runSupplyT [1 :: QueryID ..] $
+          compileQueries expr
 
     -- Warn if trivial.
     case queries of

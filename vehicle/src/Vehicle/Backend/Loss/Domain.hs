@@ -17,7 +17,7 @@ import Vehicle.Backend.Loss.LossCompilation
 import Vehicle.Backend.Solver.UserVariableElimination.ConstraintSearch (findAllBounds)
 import Vehicle.Compile.Constants.ForcedValue
 import Vehicle.Compile.Error
-import Vehicle.Compile.LiftIf (unfoldIfThunk)
+import Vehicle.Compile.LiftIf (unfoldIf)
 import Vehicle.Compile.LowerNot (lowerNot, negateQuantifierBody)
 import Vehicle.Compile.Normalise.BuiltinForced (elimImplies)
 import Vehicle.Compile.Normalise.NBEForced
@@ -411,7 +411,7 @@ compileBool value = logEntryAndExit value $ do
     VImplies args -> compileBool $ elimImplies args
     VAnd args -> compileAnd args
     VOr args -> compileOr args
-    VBoolIf args -> compileBool =<< unfoldIfThunk args
+    VBoolIf args -> compileBool =<< unfoldIf args
     VNot args -> compileBool =<< lowerNot args
     VQuantifyRatTensor args -> compileQuantifierInternal args
     VQuantifyRecord _args -> compilerDeveloperError "Non top-level record quantifiers are not supported yet"

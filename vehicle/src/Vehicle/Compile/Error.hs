@@ -36,7 +36,7 @@ import GHC.Generics (Generic)
 import GHC.Stack (HasCallStack)
 import Vehicle.Backend.Prelude
 import Vehicle.Compile.Prelude
-import Vehicle.Compile.Resource (NetworkName)
+import Vehicle.Compile.Resource (NetworkIOType, NetworkName)
 import Vehicle.Compile.Type.Core
 import Vehicle.Data.Bound (UnboundedIndices)
 import Vehicle.Data.Builtin.Interface.Normalise (NormalisableBuiltin)
@@ -130,11 +130,11 @@ data TypingError builtin
 -- MultiPropertyTraveralError
 
 data MultiPropertyTraveralError
-  = UnsupportedVectorDimension (Value Builtin)
-  | UnsupportedVectorValue (Value Builtin)
-  | UnsupportedTensorDimensions (Value Builtin)
-  | UnreducableTensorValue (Value Builtin)
-  | UnreducableType (VType Builtin)
+  = UnsupportedVectorDimension (Thunk Builtin)
+  | UnsupportedVectorValue (ForcedValue Builtin)
+  | UnsupportedTensorDimensions (Thunk Builtin)
+  | UnreducableTensorValue (ForcedValue Builtin)
+  | UnreducableType (Thunk Builtin)
   deriving (Show)
 
 type MissingResource = (ExternalResource, DeclProvenance)
@@ -223,7 +223,7 @@ data CompileError
   | UnsupportedMultipleNetworkApplications QueryFormatID DeclProvenance CompleteNamedBoundCtx [(NetworkName, Thunk Builtin)]
   | VariableSizeTensorQuantification DeclProvenance NamedBoundCtx (UnforcedBinder Builtin) (UnforcedType Builtin)
   | MultiPropertyTraveralError DeclProvenance MultiPropertyTraveralError
-  | UnboundedNetworkInputVariables DeclProvenance CompleteNamedBoundCtx (NonEmpty (NetworkName, Thunk Builtin, [Lv], UnboundedIndices))
+  | UnboundedNetworkInputVariables DeclProvenance CompleteNamedBoundCtx (NonEmpty (NetworkName, NetworkIOType, Thunk Builtin, [Lv], UnboundedIndices))
   | -- Loss backend errors
     UnknownDifferentiableLogic Name [Name]
   | UnreducableDifferentiableLogic DeclProvenance
