@@ -15,31 +15,34 @@ import Vehicle.Data.Builtin.Standard
 import Vehicle.Data.Code.ForcedValue
 import Vehicle.Data.Code.Interface
 import Vehicle.Data.Tensor (TensorIndices, TensorShape, unstack)
+import Vehicle.Data.Variable.Bound.Context.Name.Instance (runFreshNameBoundContextT)
+import Vehicle.Data.Variable.Free.Context (MonadFreeContext)
 import Vehicle.Verify.Core
 import Vehicle.Verify.Specification
 
 -- TODO move somewhere else more reusable?
 traverseMultiProperty ::
   forall m a.
-  (MonadNorm Builtin m) =>
+  (MonadFreeContext Builtin m) =>
   (PropertyAddress -> Thunk Builtin -> m a) ->
   Name ->
   Thunk Builtin ->
   Thunk Builtin ->
   m (Either MultiPropertyTraveralError (MultiProperty a))
-traverseMultiProperty compileProp propertyName declType declBody = runExceptT (go declType mempty declBody)
+traverseMultiProperty compileProp propertyName declType declBody =
+  runExceptT (go declType mempty declBody)
   where
     go :: UnforcedType Builtin -> TensorIndices -> Thunk Builtin -> ExceptT MultiPropertyTraveralError m (MultiProperty a)
     go typ indices body = do
-      forcedType <- forceThunk typ
+      forcedType <- runFreshNameBoundContextT $ forceThunk typ
       case forcedType of
         VVectorType elemType dimValue -> do
-          maybeDim <- getDim dimValue
+          maybeDim <- runFreshNameBoundContextT $ getDim dimValue
           case maybeDim of
             Nothing -> throwError $ UnsupportedVectorDimension dimValue
             Just dim -> goVector elemType dim indices body
         VTensorType _elemType dimsValue -> do
-          maybeDims <- getDims dimsValue
+          maybeDims <- runFreshNameBoundContextT $ getDims dimsValue
           case maybeDims of
             Nothing -> throwError $ UnsupportedTensorDimensions dimsValue
             Just dims -> goTensor dims indices body
@@ -47,7 +50,7 @@ traverseMultiProperty compileProp propertyName declType declBody = runExceptT (g
 
     goVector :: UnforcedType Builtin -> Int -> TensorIndices -> Thunk Builtin -> ExceptT MultiPropertyTraveralError m (MultiProperty a)
     goVector typ _dim indices value = do
-      forcedValue <- forceThunk value
+      forcedValue <- runFreshNameBoundContextT $ forceThunk value
       case toVectorValue forcedValue of
         -- TODO refactor in terms of a VectorValue class to `TypedValue` module
         VVectorLiteral args -> do
@@ -61,7 +64,7 @@ traverseMultiProperty compileProp propertyName declType declBody = runExceptT (g
         let address = PropertyAddress propertyName indices
         SingleProperty <$> lift (compileProp address value)
       _d : ds -> do
-        forcedValue <- forceThunk value
+        forcedValue <- runFreshNameBoundContextT $ forceThunk value
         case toBoolTensorValue forcedValue of
           VBoolTensorLiteral bs -> do
             let es' = zip [0 :: Int ..] (Forced . IBoolTensorLiteral <$> unstack bs)

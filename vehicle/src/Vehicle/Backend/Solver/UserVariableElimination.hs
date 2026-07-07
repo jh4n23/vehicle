@@ -272,7 +272,7 @@ unblockingActions =
     }
 
 unblockQuantifiedBoundVar ::
-  (MonadPropertyStructure m) =>
+  (MonadQuantifierBody m) =>
   Lv ->
   m (Thunk Builtin)
 unblockQuantifiedBoundVar lv =

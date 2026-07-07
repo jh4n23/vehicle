@@ -145,14 +145,14 @@ compilePropertyDecl settings prov typ body = do
   let compilePropertyFn = compileSingleProperty settings prov
   let normType = Unforced emptyBoundEnv typ
   let normBody = Unforced emptyBoundEnv body
-  errorOrResult <- runFreshTensorBoundContextT $ traverseMultiProperty compilePropertyFn (nameOf prov) normType normBody
+  errorOrResult <- traverseMultiProperty compilePropertyFn (nameOf prov) normType normBody
   case errorOrResult of
     Left err -> throwError $ MultiPropertyTraveralError prov err
     Right result -> return result
 
 -- Compiles an individual property of type `Bool`
 compileSingleProperty ::
-  (MonadStdIO m, MonadCompile m, MonadFreeContext Builtin m, MonadTensorBoundContext m) =>
+  (MonadStdIO m, MonadCompile m, MonadFreeContext Builtin m) =>
   CompilationSettings ->
   DeclProvenance ->
   PropertyAddress ->
@@ -192,14 +192,16 @@ compileQueries ::
   m (Property QueryMetaData)
 compileQueries expr = do
   showTopLevelEntry expr
-  forcedValue <- forceThunk expr
+  forcedValue <- runFreshTensorBoundContextT $ forceThunk expr
   showTopLevelExit =<< case forcedValue of
     ----------------
     -- Base cases --
     ----------------
     VBoolLiteral b -> return $ Trivial b
-    VQuantifyRatTensor (Exists, args) -> compileQuantifiedQuerySet False (Left args)
-    VQuantifyRecord (Exists, args) -> compileQuantifiedQuerySet False (Right args)
+    VQuantifyRatTensor (Exists, args) ->
+      compileQuantifiedQuerySet False (Left args)
+    VQuantifyRecord (Exists, args) ->
+      compileQuantifiedQuerySet False (Right args)
     VQuantifyRatTensor (Forall, args) -> do
       logDebug MaxDetail $ "negate" <+> pretty Forall
       let negatedArgs = negateQuantifierBody args
@@ -213,7 +215,7 @@ compileQueries expr = do
     ---------------------
     VAnd (TensorOp2Args _dims e1 e2) -> andTrivial andBoolExpr <$> compileQueries e1 <*> compileQueries e2
     VOr (TensorOp2Args _dims e1 e2) -> orTrivial orBoolExpr <$> compileQueries e1 <*> compileQueries e2
-    VBoolIf args -> compileQueries =<< unfoldIf args
+    VBoolIf args -> compileQueries =<< runFreshNameBoundContextT (unfoldIf args)
     VImplies args -> compileQueries $ elimImplies args
     -------------------------
     -- Blocked expressions --
@@ -224,7 +226,7 @@ compileQueries expr = do
     VBoolVectorAt {} -> compileQueries =<< unblock expr
     VCompareIndex {} -> compileQueries =<< unblock expr
     VCompareNat {} -> compileQueries =<< unblock expr
-    VNot args -> compileQueries =<< lowerNot args
+    VNot args -> compileQueries =<< runFreshNameBoundContextT (lowerNot args)
     -----------------
     -- Mixed cases --
     -----------------
@@ -237,7 +239,7 @@ compileQueries expr = do
     -- call to purify.
     VCompareRatTensor {} -> compileUnquantifiedQuerySet expr
   where
-    unblock = unblockBoolExpr topLevelUnblockingActions
+    unblock value = runFreshNameBoundContextT $ unblockBoolExpr topLevelUnblockingActions value
 
 compileQuantifiedQuerySet ::
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m, MonadError CompileError m) =>
@@ -249,7 +251,7 @@ compileQuantifiedQuerySet isPropertyNegated args =
     let action = case args of
           Left tensorArgs -> eliminateExists tensorArgs
           Right recordArgs -> eliminateExistsRecord recordArgs
-    (maybePartitions, globalCtx) <- runStateT action emptyGlobalCtx
+    (maybePartitions, globalCtx) <- runFreshTensorBoundContextT $ runStateT action emptyGlobalCtx
     compileQuerySetPartitions globalCtx isPropertyNegated maybePartitions
 
 -- | We only need this because we can't evaluate networks in the compiler.

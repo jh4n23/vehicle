@@ -113,19 +113,19 @@ createNetworkVarName networkName application inputOrOutput =
 type MonadPropertyStructure m =
   ( MonadLogger m,
     MonadFreeContext Builtin m,
-    MonadReader PropertyMetaData m,
-    MonadTensorBoundContext m,
-    MonadReadableNameContext m
+    MonadReader PropertyMetaData m
   )
 
 type MonadQueryStructure m =
   ( MonadPropertyStructure m,
+    MonadTensorBoundContext m,
+    MonadReadableNameContext m,
     MonadState GlobalCtx m,
     MonadError CompileError m
   )
 
 addNetworkApplicationToGlobalCtx ::
-  (MonadPropertyStructure m, MonadState GlobalCtx m) =>
+  (MonadPropertyStructure m, MonadState GlobalCtx m, MonadTensorBoundContext m) =>
   Name ->
   NetworkContextInfo ->
   Thunk Builtin ->
