@@ -20,8 +20,10 @@ import Vehicle.Compile.Error
 import Vehicle.Compile.ExpandResources (expandResources)
 import Vehicle.Compile.ExpandResources.Core
 import Vehicle.Compile.LiftIf (unfoldIf)
-import Vehicle.Compile.LowerNot (lowerNot, negateRatTensorQuantifierBody, negateRecordQuantifierBody)
-import Vehicle.Compile.Normalise.NBE
+import Vehicle.Compile.LowerNot
+import Vehicle.Compile.Normalise.BuiltinForced (elimImplies)
+import Vehicle.Compile.Normalise.NBEForced
+import Vehicle.Compile.Normalise.TypedValueForced
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Print (prettyFriendly, prettyFriendlyEmptyCtx)
 import Vehicle.Compile.Print.Warning ()
@@ -29,9 +31,8 @@ import Vehicle.Compile.Property (traverseMultiProperty)
 import Vehicle.Compile.Unblock (UnblockingActions (..), unblockBoolExpr)
 import Vehicle.Data.Builtin.Standard
 import Vehicle.Data.Code.BooleanExpr
+import Vehicle.Data.Code.ForcedValue
 import Vehicle.Data.Code.Interface
-import Vehicle.Data.Code.TypedView
-import Vehicle.Data.Code.Value
 import Vehicle.Data.MaybeTrivial (MaybeTrivial (..), andTrivial, orTrivial)
 import Vehicle.Data.Variable.Bound.Context.Name
 import Vehicle.Data.Variable.Bound.Context.Tensor
@@ -142,10 +143,8 @@ compilePropertyDecl ::
   m (MultiProperty PropertyAddress)
 compilePropertyDecl settings prov typ body = do
   let compilePropertyFn = compileSingleProperty settings prov
-  normType <- evalInEmptyEnv typ
-  normBody <- evalInEmptyEnv body
-  logDebug MaxDetail $ prettyFriendlyEmptyCtx normType
-  logDebug MaxDetail $ prettyFriendlyEmptyCtx normBody
+  let normType = Unforced emptyBoundEnv typ
+  let normBody = Unforced emptyBoundEnv body
   errorOrResult <- traverseMultiProperty compilePropertyFn (nameOf prov) normType normBody
   case errorOrResult of
     Left err -> throwError $ MultiPropertyTraveralError prov err
@@ -157,7 +156,7 @@ compileSingleProperty ::
   CompilationSettings ->
   DeclProvenance ->
   PropertyAddress ->
-  Value Builtin ->
+  Thunk Builtin ->
   m PropertyAddress
 compileSingleProperty CompilationSettings {..} prov propertyAddress expr =
   logCompilerSection2 MinDetail ("property" <+> quotePretty propertyAddress) $ do
@@ -190,11 +189,12 @@ compileSingleProperty CompilationSettings {..} prov propertyAddress expr =
 compileQueries ::
   forall m.
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m, MonadError CompileError m) =>
-  Value Builtin ->
+  Thunk Builtin ->
   m (Property QueryMetaData)
 compileQueries expr = do
   showTopLevelEntry expr
-  showTopLevelExit =<< case toBoolValue expr of
+  forcedValue <- forceThunk expr
+  showTopLevelExit =<< case forcedValue of
     ----------------
     -- Base cases --
     ----------------
@@ -203,11 +203,11 @@ compileQueries expr = do
     VQuantifyRecord (Exists, args) -> compileQuantifiedQuerySet False (Right args)
     VQuantifyRatTensor (Forall, args) -> do
       logDebug MaxDetail $ "negate" <+> pretty Forall
-      negatedArgs <- negateRatTensorQuantifierBody args
+      let negatedArgs = negateQuantifierBody args
       compileQuantifiedQuerySet True (Left negatedArgs)
     VQuantifyRecord (Forall, args) -> do
       logDebug MaxDetail $ "negate" <+> pretty Forall
-      negatedArgs <- negateRecordQuantifierBody args
+      let negatedArgs = negateRecordQuantifierBody args
       compileQuantifiedQuerySet True (Right negatedArgs)
     ---------------------
     -- Recursive cases --
@@ -215,12 +215,14 @@ compileQueries expr = do
     VAnd (TensorOp2Args _dims e1 e2) -> andTrivial andBoolExpr <$> compileQueries e1 <*> compileQueries e2
     VOr (TensorOp2Args _dims e1 e2) -> orTrivial orBoolExpr <$> compileQueries e1 <*> compileQueries e2
     VBoolIf args -> compileQueries =<< unfoldIf args
+    VImplies args -> compileQueries $ elimImplies args
     -------------------------
     -- Blocked expressions --
     -------------------------
     VReduceAndTensor {} -> compileQueries =<< unblock expr
     VReduceOrTensor {} -> compileQueries =<< unblock expr
-    VBoolAt {} -> compileQueries =<< unblock expr
+    VBoolTensorAt {} -> compileQueries =<< unblock expr
+    VBoolVectorAt {} -> compileQueries =<< unblock expr
     VCompareIndex {} -> compileQueries =<< unblock expr
     VCompareNat {} -> compileQueries =<< unblock expr
     VNot args -> compileQueries =<< lowerNot args
@@ -241,7 +243,7 @@ compileQueries expr = do
 compileQuantifiedQuerySet ::
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m, MonadError CompileError m) =>
   Bool ->
-  Either (QuantifyRatTensorArgs (Value Builtin) (Closure Builtin)) (QuantifyRecordArgs (Value Builtin) (Closure Builtin)) ->
+  Either (QuantifyRatTensorArgs (Thunk Builtin) (Closure Builtin)) (QuantifyRecordArgs (Thunk Builtin) (Closure Builtin)) ->
   m (Property QueryMetaData)
 compileQuantifiedQuerySet isPropertyNegated args =
   logCompilerSection2 MaxDetail "compilation of query set" $ do
@@ -254,7 +256,7 @@ compileQuantifiedQuerySet isPropertyNegated args =
 -- | We only need this because we can't evaluate networks in the compiler.
 compileUnquantifiedQuerySet ::
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m, MonadError CompileError m) =>
-  Value Builtin ->
+  Thunk Builtin ->
   m (Property QueryMetaData)
 compileUnquantifiedQuerySet value = do
   let subsectionDoc = "compilation of set of unquantified queries:" <+> prettyFriendlyEmptyCtx value
@@ -299,7 +301,7 @@ handlePropertyCompileError CompilationSettings {..} declProv err = do
     UnsupportedAlternatingQuantifiers {} -> diagnoseAlternatingQuantifiers formatID originalProg declProv
     _ -> return err
 
-showTopLevelEntry :: (MonadCompile m) => Value Builtin -> m ()
+showTopLevelEntry :: (MonadCompile m) => Thunk Builtin -> m ()
 showTopLevelEntry v = do
   logDebugM MaxDetail $ do
     let vDoc = prettyFriendly (WithContext v emptyNamedCtx)

@@ -348,7 +348,7 @@ createTensorLikeComparisonInstance ::
 createTensorLikeComparisonInstance p recordIdent = do
   let recordType = freeVar recordIdent
 
-  let toTensor = toDSL $ constructToTensorFreeVar recordIdent p
+  let toTensor = toDSL $ FreeVar p $ constructToTensorFreeVar recordIdent
 
   let typeclass = fromDSL mempty $ freeVar hasComparisonIdent @@ [recordType, recordType]
   let instanceName = Text.pack "_" <> nameOf recordIdent <> "HasComparison"
@@ -455,19 +455,17 @@ deriveArithmeticOp2 typeclassIdent typeclassOp p recordIdent telescope fields = 
 
 constructFromTensorFreeVar ::
   Identifier ->
-  Provenance ->
-  Expr Builtin
-constructFromTensorFreeVar ident p = do
+  Identifier
+constructFromTensorFreeVar ident = do
   let name = Text.pack "_" <> identifierName ident <> "FromTensor"
-  FreeVar p (Identifier (modulePath ident) name)
+  Identifier (modulePath ident) name
 
 constructToTensorFreeVar ::
   Identifier ->
-  Provenance ->
-  Expr Builtin
-constructToTensorFreeVar ident p = do
+  Identifier
+constructToTensorFreeVar ident = do
   let name = Text.pack "_" <> identifierName ident <> "ToTensor"
-  FreeVar p (Identifier (modulePath ident) name)
+  Identifier (modulePath ident) name
 
 createImplicitTelescope :: Telescope Builtin -> Telescope Builtin
 createImplicitTelescope = fmap (flip setBinderVisibility $ Implicit True)

@@ -18,13 +18,13 @@ import Vehicle.Backend.Solver.UserVariableElimination.ConstraintSearch (findAllB
 import Vehicle.Compile.Constants.ForcedValue
 import Vehicle.Compile.Error
 import Vehicle.Compile.LiftIf (unfoldIfThunk)
-import Vehicle.Compile.LowerNotForced (lowerNot, negateQuantifierBody)
+import Vehicle.Compile.LowerNot (lowerNot, negateQuantifierBody)
 import Vehicle.Compile.Normalise.BuiltinForced (elimImplies)
 import Vehicle.Compile.Normalise.NBEForced
 import Vehicle.Compile.Normalise.Quote (Quote (..))
 import Vehicle.Compile.Normalise.TypedValueForced
 import Vehicle.Compile.Prelude
-import Vehicle.Compile.UnblockForced (toComparison, unblockBoolExpr)
+import Vehicle.Compile.Unblock (toComparison, unblockBoolExpr)
 import Vehicle.Data.Assertion (Assertion, NormalisedRelation (..), Relation (..))
 import Vehicle.Data.Bound
 import Vehicle.Data.Bound.FourierMotzkinElimination (fourierMotzkinTensorBoundsElimination)

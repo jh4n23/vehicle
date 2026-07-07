@@ -16,7 +16,7 @@ import Vehicle.Compile.Constants.ForcedValue (TensorValueLinearExpr)
 import Vehicle.Compile.Normalise.NBEForced
 import Vehicle.Compile.Normalise.TypedValueForced
 import Vehicle.Compile.Prelude
-import Vehicle.Compile.UnblockForced (TypeUnblockingFunction, UnblockingActions (..), toComparison, unblockRatTensorValue)
+import Vehicle.Compile.Unblock (TypeUnblockingFunction, UnblockingActions (..), toComparison, unblockRatTensorValue)
 import Vehicle.Data.Assertion (Assertion, comparisonToAssertion)
 import Vehicle.Data.Builtin.Interface (Accessor (..))
 import Vehicle.Data.Builtin.Standard
@@ -301,7 +301,7 @@ purifyBoundVar lv = do
   (_, maybeChildVars) <- lookupVariableInNestedCtx lv
   case maybeChildVars of
     Nothing -> return $ Forced $ VBoundVar lv []
-    Just (_tensorVar, sliceVar) -> replaceTensorVariableWithStackedChildrenForced sliceVar
+    Just (_tensorVar, sliceVar) -> replaceTensorVariableWithStackedChildren sliceVar
 
 --------------------------------------------------------------------------------
 -- Utility functions

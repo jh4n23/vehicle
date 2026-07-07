@@ -7,7 +7,6 @@ import Vehicle.Data.Builtin.Interface.Print
 import Vehicle.Data.Code.ForcedValue (ForcedValue, Thunk)
 import Vehicle.Data.Code.ForcedValue qualified as F
 import Vehicle.Data.Code.Value
-import Vehicle.Data.Variable.Bound.Context.Name.Class (MonadReadableNameContext, getBinderDepth)
 import Vehicle.Data.Variable.Bound.Level (Lv, dbLevelToIndex)
 import Vehicle.Prelude
 
@@ -16,15 +15,6 @@ import Vehicle.Prelude
 -- lambdas.
 unnormalise :: forall a b. (HasCallStack, Quote a b) => Lv -> a -> b
 unnormalise = quote mempty
-
-unnormaliseInCtx ::
-  forall expr m.
-  (HasCallStack, MonadReadableNameContext m, Show expr) =>
-  Value expr ->
-  m (Expr expr)
-unnormaliseInCtx e = do
-  lv <- getBinderDepth
-  return $ unnormalise lv e
 
 -----------------------------------------------------------------------------
 -- Quoting closures

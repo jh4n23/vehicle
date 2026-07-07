@@ -22,8 +22,8 @@ import Vehicle.Data.Assertion
 import Vehicle.Data.Bound (BoundedValue, Domain)
 import Vehicle.Data.Builtin.Standard
 import Vehicle.Data.Code.BooleanExpr
+import Vehicle.Data.Code.ForcedValue
 import Vehicle.Data.Code.LinearExpr
-import Vehicle.Data.Code.Value
 import Vehicle.Data.Hashing ()
 import Vehicle.Data.MaybeTrivial
 import Vehicle.Data.Tensor as Tensor
@@ -54,7 +54,8 @@ data PropertyMetaData = PropertyMetaData
 data NetworkApplicationInfo = NetworkApplicationInfo
   { inputVariable :: NetworkInputTensorVariable,
     outputVariable :: NetworkOutputTensorVariable,
-    inputValue :: Value Builtin
+    inputType :: UnforcedType Builtin,
+    inputValue :: Thunk Builtin
   }
 
 type NetworkApplications = Map NetworkName (NonEmpty NetworkApplicationInfo)
@@ -80,7 +81,7 @@ emptyGlobalCtx =
 
 addUserVarToGlobalContext ::
   (MonadLogger m, MonadTensorBoundContext m) =>
-  VBinder Builtin ->
+  UnforcedBinder Builtin ->
   NetworkModality TensorShape ->
   GlobalCtx ->
   m (UserTensorVariable, GlobalCtx)
@@ -127,8 +128,8 @@ addNetworkApplicationToGlobalCtx ::
   (MonadPropertyStructure m, MonadState GlobalCtx m) =>
   Name ->
   NetworkContextInfo ->
-  Value Builtin ->
-  m (Value Builtin, Value Builtin)
+  Thunk Builtin ->
+  m (Thunk Builtin, Thunk Builtin)
 addNetworkApplicationToGlobalCtx name networkInfo arg = do
   -- Can't current track network application provenance
   let p = mempty
@@ -162,7 +163,7 @@ addNetworkApplicationToGlobalCtx name networkInfo arg = do
         ..
       }
 
-  return (inputVarExpr, outputVarExpr)
+  return (Forced inputVarExpr, Forced outputVarExpr)
 
 createSubstitutionForVariable ::
   forall m variable.

@@ -224,7 +224,6 @@ library
     Vehicle.Compile.LiftIf
     Vehicle.Compile.LiftMinMax
     Vehicle.Compile.LowerNot
-    Vehicle.Compile.LowerNotForced
     Vehicle.Compile.Normalise.BuiltinForced
     Vehicle.Compile.Normalise.Core
     Vehicle.Compile.Normalise.NBEForced
@@ -262,7 +261,6 @@ library
     Vehicle.Compile.Type.Subsystem
     Vehicle.Compile.Type.System
     Vehicle.Compile.Unblock
-    Vehicle.Compile.UnblockForced
     Vehicle.Compile.Variable
     Vehicle.Data.Assertion
     Vehicle.Data.AST

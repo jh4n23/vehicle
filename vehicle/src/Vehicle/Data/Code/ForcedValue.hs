@@ -50,6 +50,7 @@ import Vehicle.Prelude
 -----------------------------------------------------------------------------
 -- Thunks
 
+-- | A thunk represents an expression that may not yet have been evaluated.
 data Thunk builtin
   = Forced (ForcedValue builtin)
   | Unforced (BoundEnv builtin) (Expr builtin)

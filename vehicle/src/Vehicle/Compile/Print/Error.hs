@@ -23,6 +23,8 @@ import Vehicle.Data.Builtin.Interface.Normalise (getDimsExprs)
 import Vehicle.Data.Builtin.Linearity
 import Vehicle.Data.Builtin.Polarity
 import Vehicle.Data.Builtin.Standard.Core
+import Vehicle.Data.Code.ForcedValue (Thunk)
+import Vehicle.Data.Code.ForcedValue qualified as Forced
 import Vehicle.Data.Code.TypedView
 import Vehicle.Data.Code.Value
 import Vehicle.Data.DifferentiableLogic (TensorDifferentiableLogicField (..))
@@ -958,7 +960,7 @@ formatCompileError = \case
                 <+> maybe mempty (\t -> pretty $ nameOf t) typeIdent
                 <+> squotes (pretty varName)
           _ ->
-            lineIndent (prettyFriendly (WithContext (VFreeVar (Identifier userModulePath networkName) [explicit inputValue]) ctx))
+            lineIndent (prettyFriendly (WithContext (Forced.VFreeVar (Identifier userModulePath networkName) [explicit inputValue]) ctx))
               <> line
               <> "In particular,"
                 <+> missingBounds unboundedInputs
@@ -1142,7 +1144,7 @@ supportedNetworkTypeDescription =
     <> line
     <> "where 'a_i' and 'b_i' are all constants at compile time."
 
-multipleNetworkErrorMessages :: Doc a -> CompleteNamedBoundCtx -> [(Name, Value Builtin)] -> Doc a
+multipleNetworkErrorMessages :: Doc a -> CompleteNamedBoundCtx -> [(Name, Thunk Builtin)] -> Doc a
 multipleNetworkErrorMessages verifier ctx networkNames = do
   let prettyApp (n, v) = pretty n <+> prettyFriendly (WithContext v ctx)
   "The"
