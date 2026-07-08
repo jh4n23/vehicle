@@ -252,7 +252,7 @@ compileQuantifiedQuerySet isPropertyNegated args =
       let action = case args of
             Left tensorArgs -> eliminateExists tensorArgs
             Right recordArgs -> eliminateExistsRecord recordArgs
-      (maybePartitions, globalCtx) <- runFreshTensorBoundContextT $ runStateT action emptyGlobalCtx
+      (maybePartitions, globalCtx) <- runStateT action emptyGlobalCtx
       compileQuerySetPartitions globalCtx isPropertyNegated maybePartitions
 
 -- | We only need this because we can't evaluate networks in the compiler.

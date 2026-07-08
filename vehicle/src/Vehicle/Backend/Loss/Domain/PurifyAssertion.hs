@@ -35,7 +35,7 @@ import Vehicle.Data.Variable.Free.Context (MonadFreeContext)
 type MonadPurifyAssertion m =
   ( MonadLogger m,
     MonadFreeContext Builtin m,
-    MonadReadableTensorBoundContext m
+    MonadTensorBoundContext m
   )
 
 -- | Takes a tensor level comparison and returns a tree of possible assertions

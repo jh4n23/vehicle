@@ -198,7 +198,7 @@ instance Forced.NormalisableBuiltin Builtin where
       ConstTensor -> Forced.Eval Forced.evalConstTensor
       FoldList -> Forced.Eval Forced.evalFoldList
       MapList -> Forced.Eval Forced.evalMapList
-      ForeachTensor -> Forced.Eval Forced.liftAndEvalForeachTensor
+      ForeachTensor -> Forced.Eval Forced.evalForeachTensor
       ForeachVector -> Forced.Eval Forced.evalForeachVector
       Iterate -> Forced.Eval Forced.evalIterate
       QuantifyRatTensor {} -> Forced.None

@@ -163,7 +163,7 @@ compileBoolExpr ::
 compileBoolExpr value = do
   showEntry value
   forcedValue <- forceThunk value
-  showExit =<< case forcedValue of
+  showExit =<< case toBoolValue forcedValue of
     ----------------
     -- Base cases --
     ----------------
@@ -181,14 +181,14 @@ compileBoolExpr value = do
     ---------------------
     VNot arg -> compileBoolExpr =<< lowerNot arg
     VBoolIf args -> compileBoolExpr =<< unfoldIf args
-    VCompareNat {} -> unblockAndRec value
-    VCompareIndex {} -> unblockAndRec value
-    VReduceAndTensor {} -> unblockAndRec value
-    VReduceOrTensor {} -> unblockAndRec value
-    VBoolTensorAt {} -> unblockAndRec value
-    VBoolVectorAt {} -> unblockAndRec value
+    VCompareNat {} -> unblockAndRec forcedValue
+    VCompareIndex {} -> unblockAndRec forcedValue
+    VReduceAndTensor {} -> unblockAndRec forcedValue
+    VReduceOrTensor {} -> unblockAndRec forcedValue
+    VBoolTensorAt {} -> unblockAndRec forcedValue
+    VBoolVectorAt {} -> unblockAndRec forcedValue
   where
-    unblockAndRec e = compileBoolExpr =<< Unblocking.unblockBoolExpr unblockingActions e
+    unblockAndRec e = compileBoolExpr =<< Unblocking.unblockBoolExpr unblockingActions (Forced e)
 
 purifyAndCompileAssertion ::
   (MonadQuantifierBody m) =>

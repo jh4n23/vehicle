@@ -139,7 +139,7 @@ lookupVariableInNestedCtx lv = do
 -- | A monad that is used to store the current bound context at a given point
 -- in a program where some of the variables represent tensors, i.e. what
 -- bound variables are in scope.
-class (MonadReadableTensorBoundContext m) => MonadTensorBoundContext m where
+class (MonadReadableTensorBoundContext m, MonadNameContext m) => MonadTensorBoundContext m where
   addNonTensorBinderToContext :: GenericBinder expr -> m a -> m a
   addTensorBinderToContextLocally :: KnownPrefixOfTensorShape -> UnforcedBinder Builtin -> m a -> m a
   addTensorBinderToContextPermenantly :: Provenance -> Name -> NetworkModality TensorShape -> m NestedSliceVariable

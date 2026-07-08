@@ -227,6 +227,7 @@ library
     Vehicle.Compile.Normalise.BuiltinForced
     Vehicle.Compile.Normalise.Core
     Vehicle.Compile.Normalise.NBEForced
+    Vehicle.Compile.Normalise.RewriteRules
     Vehicle.Compile.Normalise.TypedValueForced
     Vehicle.Compile.Prelude.Utils
     Vehicle.Compile.Print.Warning

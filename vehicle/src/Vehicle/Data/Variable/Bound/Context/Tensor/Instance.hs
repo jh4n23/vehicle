@@ -14,7 +14,7 @@ import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.State (MonadState (..), MonadTrans (..), StateT (..), evalStateT, gets, mapStateT, modify)
 import Vehicle.Compile.Prelude
 import Vehicle.Compile.Resource (NetworkModality (..))
-import Vehicle.Data.Variable.Bound.Context.Name.Class (MonadReadableNameContext (..), getBinderDepth)
+import Vehicle.Data.Variable.Bound.Context.Name.Class (MonadNameContext (..), MonadReadableNameContext (..), getBinderDepth)
 import Vehicle.Data.Variable.Bound.Context.Tensor.Class
 import Vehicle.Data.Variable.Bound.Context.Tensor.Core
 import Vehicle.Data.Variable.Bound.Level (NestedSliceVariable (..), SliceVariable (..))
@@ -83,11 +83,8 @@ instance (MonadReader s m) => MonadReader s (TensorBoundContextT m) where
 instance (MonadSupply s m) => MonadSupply s (TensorBoundContextT m) where
   demand = lift demand
 
-instance (Monad m) => MonadReadableNameContext (TensorBoundContextT m) where
-  getNameContext = TensorBoundContextT $ gets $ fmap Just . nestedVariableCtxNames
-
-instance (Monad m) => MonadReadableTensorBoundContext (TensorBoundContextT m) where
-  getNestedVariableCtx = TensorBoundContextT get
+instance (Monad m) => MonadNameContext (TensorBoundContextT m) where
+  addNameToContext = addNonTensorBinderToContext
 
 instance (Monad m) => MonadTensorBoundContext (TensorBoundContextT m) where
   addNonTensorBinderToContext binder action =
@@ -105,3 +102,9 @@ instance (Monad m) => MonadTensorBoundContext (TensorBoundContextT m) where
     TensorBoundContextT $ do
       modify (appendTensorVariableToNestedCtx (mkExplicitBinder () (Just (p, name))) shape)
       return $ NestedSliceVariable shape (SliceVariable lv)
+
+instance (Monad m) => MonadReadableNameContext (TensorBoundContextT m) where
+  getNameContext = TensorBoundContextT $ gets $ fmap Just . nestedVariableCtxNames
+
+instance (Monad m) => MonadReadableTensorBoundContext (TensorBoundContextT m) where
+  getNestedVariableCtx = TensorBoundContextT get

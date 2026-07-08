@@ -356,7 +356,7 @@ instance NormalisableBuiltin LossBuiltin where
       ConstTensor -> Eval evalConstTensor
       FoldList -> Eval evalFoldList
       MapList -> Eval evalMapList
-      ForeachTensor -> Eval liftAndEvalForeachTensor
+      ForeachTensor -> Eval evalForeachTensor
       ForeachVector -> Eval evalForeachVector
       AtVector -> Eval evalAtVector
     _ -> None

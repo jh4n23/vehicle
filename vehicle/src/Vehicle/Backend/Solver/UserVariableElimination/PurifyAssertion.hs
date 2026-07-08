@@ -23,15 +23,13 @@ import Vehicle.Data.Variable.Free.Context (MonadFreeContext)
 type MonadPurify m =
   ( MonadLogger m,
     MonadFreeContext Builtin m,
-    MonadReadableNameContext m
+    MonadNameContext m
   )
 
 -- | Takes in a comparison over real tensors that possibly contains further
 -- boolean structure via `if`s and returns a tree of the possible assertions.
 purifyAssertion ::
-  ( MonadLogger m,
-    MonadFreeContext Builtin m,
-    MonadReadableNameContext m
+  ( MonadPurify m
   ) =>
   UnblockingActions m ->
   ComparisonOp ->
@@ -75,14 +73,14 @@ purifyRatTensorExpr actions@UnblockingActions {..} incrDims value = do
     VRatConstTensor args -> purifyConstTensor args
     VRatStackTensor args -> purifyStackTensor (recPurify (incrDims - 1)) args
     VIfRatTensor args -> unblockIf (recPurify incrDims) args
-    VMinRatTensor args -> unblockMinRatTensor (recPurify incrDims) args
-    VMaxRatTensor args -> unblockMaxRatTensor (recPurify incrDims) args
-    VReduceAddRatTensor args -> unblockReduceTensor (recPurify (incrDims + 1)) (forceEval evalReduceAddRatTensor) args
-    VReduceMulRatTensor args -> unblockReduceTensor (recPurify (incrDims + 1)) (forceEval evalReduceMulRatTensor) args
-    VReduceMinRatTensor args -> unblockReduceTensor (recPurify (incrDims + 1)) (forceEval evalReduceMinRatTensor) args
-    VReduceMaxRatTensor args -> unblockReduceTensor (recPurify (incrDims + 1)) (forceEval evalReduceMaxRatTensor) args
-    VRatAtTensor args -> unblockAtTensor (recPurify (incrDims + 1)) (unblockIndexValue actions) args
-    VRatForeach args -> unblockForeachTensor args
+    VMinRatTensor args -> recPurify incrDims =<< purifyMinMax True args
+    VMaxRatTensor args -> recPurify incrDims =<< purifyMinMax False args
+    VReduceAddRatTensor args -> unblockReduceTensor (recPurify incrDims) (recPurify (incrDims + 1)) (forceEval evalReduceAddRatTensor) args
+    VReduceMulRatTensor args -> unblockReduceTensor (recPurify incrDims) (recPurify (incrDims + 1)) (forceEval evalReduceMulRatTensor) args
+    VReduceMinRatTensor args -> unblockReduceTensor (recPurify incrDims) (recPurify (incrDims + 1)) (forceEval evalReduceMinRatTensor) args
+    VReduceMaxRatTensor args -> unblockReduceTensor (recPurify incrDims) (recPurify (incrDims + 1)) (forceEval evalReduceMaxRatTensor) args
+    VRatAtTensor args -> unblockAtTensor (recPurify incrDims) (recPurify (incrDims + 1)) (unblockIndexValue actions) args
+    VRatForeach args -> unblockForeachTensor (recPurify incrDims) args
     VRatTensorBoundVar v
       | incrDims == 0 -> return $ IfLeaf $ Forced $ VBoundVar v []
       | otherwise -> recPurify incrDims =<< unblockRatTensorBoundVar v
@@ -92,6 +90,16 @@ purifyRatTensorExpr actions@UnblockingActions {..} incrDims value = do
     VParameterOrDataset {} -> developerError "datasets and parameters should have been eliminated"
   where
     recPurify = purifyRatTensorExpr actions
+
+purifyMinMax ::
+  (MonadPurify m) =>
+  Bool ->
+  TensorOp2Args (Thunk Builtin) ->
+  m (Thunk Builtin)
+purifyMinMax isMin (TensorOp2Args ds xs ys) = do
+  let typ = Forced $ ITensorType (Forced IRatType) ds
+  condition <- toComparison (if isMin then Le else Ge, TensorOp2Args ds xs ys)
+  return $ Forced $ mkExpr accessIf $ IfArgs typ condition xs ys
 
 purifyTensorOp1 ::
   TypeUnblockingFunction (Thunk Builtin) m ->

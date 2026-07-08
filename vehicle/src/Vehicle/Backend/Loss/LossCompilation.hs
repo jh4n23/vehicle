@@ -7,10 +7,10 @@ module Vehicle.Backend.Loss.LossCompilation
 where
 
 import Vehicle.Backend.Loss.Core hiding (currentPass)
-import Vehicle.Compile.Normalise.BuiltinForced (liftAndEvalForeachTensor)
 import Vehicle.Compile.Normalise.Core (BuiltinEvaluationResult (..), force)
 import Vehicle.Compile.Normalise.NBEForced (forceApplication, forceFreeVar, forceThunk)
 import Vehicle.Compile.Normalise.Quote (Quote (..))
+import Vehicle.Compile.Normalise.RewriteRules (rewriteForeachTensor)
 import Vehicle.Compile.Prelude
 import Vehicle.Data.Builtin.Interface (Accessor (..))
 import Vehicle.Data.Builtin.Loss
@@ -144,7 +144,7 @@ convertThunk quantifiers = go
       Nothing -> Forced . VBuiltin (LossBuiltinFunction ForeachTensor) <$> traverseArgs go args
       Just foreachArgs -> do
         nameCtx <- fmap Just <$> getCompleteNamedCtx
-        result <- runNameBoundContextT nameCtx $ liftAndEvalForeachTensor foreachArgs
+        result <- runNameBoundContextT nameCtx $ rewriteForeachTensor foreachArgs
         case result of
           Unevaluable {} -> Forced . VBuiltin (LossBuiltinFunction ForeachTensor) <$> traverseArgs go args
           Evaluated val -> go val

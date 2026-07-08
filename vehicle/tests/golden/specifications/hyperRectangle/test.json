@@ -6,7 +6,7 @@
   },
   {
     "name": "Marabou",
-    "run": "vehicle compile queries -s spec.vcl -f MarabouQueries -o Marabou.queries/ --network classifier:adv.onnx --dataset inputs:5inputs.idx",
+    "run": "vehicle compile queries -s spec.vcl -f MarabouQueries -o Marabou.queries/ --network classifier:adv.onnx --dataset inputs:5inputs.idx --logging MaxDetail --loggingPass Solver",
     "needs": ["spec.vcl", "adv.onnx", "5inputs.idx"],
     "produces": [
       "Marabou.queries/*.txt",
