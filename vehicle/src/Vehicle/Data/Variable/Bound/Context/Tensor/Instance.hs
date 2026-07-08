@@ -80,6 +80,9 @@ instance (MonadReader s m) => MonadReader s (TensorBoundContextT m) where
   ask = lift ask
   local = mapTensorBoundContextT . local
 
+instance (MonadSupply s m) => MonadSupply s (TensorBoundContextT m) where
+  demand = lift demand
+
 instance (Monad m) => MonadReadableNameContext (TensorBoundContextT m) where
   getNameContext = TensorBoundContextT $ gets $ fmap Just . nestedVariableCtxNames
 

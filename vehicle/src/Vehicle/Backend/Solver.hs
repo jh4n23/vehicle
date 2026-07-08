@@ -247,26 +247,28 @@ compileQuantifiedQuerySet ::
   Either (QuantifyRatTensorArgs (Thunk Builtin) (Closure Builtin)) (QuantifyRecordArgs (Thunk Builtin) (Closure Builtin)) ->
   m (Property QueryMetaData)
 compileQuantifiedQuerySet isPropertyNegated args =
-  logCompilerSection2 MaxDetail "compilation of query set" $ do
-    let action = case args of
-          Left tensorArgs -> eliminateExists tensorArgs
-          Right recordArgs -> eliminateExistsRecord recordArgs
-    (maybePartitions, globalCtx) <- runFreshTensorBoundContextT $ runStateT action emptyGlobalCtx
-    compileQuerySetPartitions globalCtx isPropertyNegated maybePartitions
+  runFreshTensorBoundContextT $
+    logCompilerSection2 MaxDetail "compilation of query set" $ do
+      let action = case args of
+            Left tensorArgs -> eliminateExists tensorArgs
+            Right recordArgs -> eliminateExistsRecord recordArgs
+      (maybePartitions, globalCtx) <- runFreshTensorBoundContextT $ runStateT action emptyGlobalCtx
+      compileQuerySetPartitions globalCtx isPropertyNegated maybePartitions
 
 -- | We only need this because we can't evaluate networks in the compiler.
 compileUnquantifiedQuerySet ::
   (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m, MonadError CompileError m) =>
   Thunk Builtin ->
   m (Property QueryMetaData)
-compileUnquantifiedQuerySet value = do
-  let subsectionDoc = "compilation of set of unquantified queries:" <+> prettyFriendlyEmptyCtx value
-  logCompilerSection2 MaxDetail subsectionDoc $ do
-    (maybePartitions, globalCtx) <- runStateT (eliminateExistless value) emptyGlobalCtx
-    compileQuerySetPartitions globalCtx False maybePartitions
+compileUnquantifiedQuerySet value =
+  runFreshTensorBoundContextT $ do
+    let subsectionDoc = "compilation of set of unquantified queries:" <+> prettyFriendlyEmptyCtx value
+    logCompilerSection2 MaxDetail subsectionDoc $ do
+      (maybePartitions, globalCtx) <- runStateT (eliminateExistless value) emptyGlobalCtx
+      compileQuerySetPartitions globalCtx False maybePartitions
 
 compileQuerySetPartitions ::
-  (MonadPropertyStructure m, MonadSupply QueryID m, MonadStdIO m, MonadError CompileError m) =>
+  (MonadPropertyStructure m, MonadSupply QueryID m, MonadTensorBoundContext m, MonadStdIO m, MonadError CompileError m) =>
   GlobalCtx ->
   QuerySetNegationStatus ->
   MaybeTrivial Partitions ->

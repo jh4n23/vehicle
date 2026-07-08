@@ -261,7 +261,7 @@ type MonadQuantifierBody m =
   )
 
 unblockingActions ::
-  (MonadPropertyStructure m, MonadState GlobalCtx m, MonadWriter [Thunk Builtin] m) =>
+  (MonadQuantifierBody m) =>
   UnblockingActions m
 unblockingActions =
   UnblockingActions
@@ -279,7 +279,7 @@ unblockQuantifiedBoundVar lv =
   replaceTensorVariableWithStackedChildren (SliceVariable lv)
 
 unblockNetworkApplication ::
-  (MonadPropertyStructure m, MonadState GlobalCtx m, MonadWriter [Thunk Builtin] m) =>
+  (MonadQuantifierBody m) =>
   TypeUnblockingFunction (Thunk Builtin) m ->
   TypeUnblockingFunction (Thunk Builtin) m ->
   Identifier ->
