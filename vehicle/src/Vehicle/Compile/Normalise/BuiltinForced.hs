@@ -1,6 +1,5 @@
 module Vehicle.Compile.Normalise.BuiltinForced where
 
-import Control.Applicative ((<|>))
 import Control.Monad (foldM, zipWithM)
 import Data.Maybe (isJust)
 import Data.Ratio
@@ -475,27 +474,27 @@ evalAtTensor ::
   (MonadNormBuiltin m, HasTensorLiterals expr builtin, BuiltinHasListLiterals builtin, BuiltinHasIndexLiterals builtin, HasTensorExpr expr thunk builtin) =>
   EvalSimple expr thunk AtTensorArgs builtin m
 evalAtTensor (AtTensorArgs _t _d ds tensor index) = do
-  fIndex <- force @expr index
   fTensor <- force @expr tensor
-  let maybeResult = case fIndex of
-        IIndexLiteral i _ -> do
-          goLiterals fTensor i tensorLiterals
-            <|> case fTensor of
-              (getExpr accessStackTensor -> Just stackArgs) -> Just $ return $ Evaluated $ stackElements stackArgs !! i
-              (getExpr accessConstTensor -> Just constArgs) -> Just $ return $ Evaluated $ exprToThunk $ mkExpr accessConstTensor $ constArgs {constDims = ds}
-              _ -> Nothing
-        _ -> Nothing
-  case maybeResult of
-    Nothing -> return $ Unevaluable [fIndex, fTensor]
-    Just result -> result
+  case fTensor of
+    (getExpr accessConstTensor -> Just constArgs) -> return $ Evaluated $ exprToThunk $ mkExpr accessConstTensor $ constArgs {constDims = ds}
+    (getExpr accessStackTensor -> Just stackArgs) -> do
+      fIndex <- force @expr index
+      case fIndex of
+        IIndexLiteral i _ -> return $ Evaluated $ stackElements stackArgs !! i
+        _ -> return $ Unevaluable [fIndex, fTensor]
+    _ -> goLiterals fTensor tensorLiterals
   where
-    goLiterals :: expr builtin -> Int -> [TensorLiteralAccessor expr builtin] -> Maybe (m (BuiltinEvaluationResult expr thunk builtin))
-    goLiterals fTensor i literals = case literals of
+    goLiterals :: expr builtin -> [TensorLiteralAccessor expr builtin] -> m (BuiltinEvaluationResult expr thunk builtin)
+    goLiterals fTensor literals = case literals of
       Wrapper Access {..} : remainingLiterals -> case getExpr fTensor of
-        Just xs -> Just $ return $ Evaluated $ exprToThunk $ mkExpr (xs `at` i)
-        Nothing -> do
-          goLiterals fTensor i remainingLiterals
-      _ -> Nothing
+        Nothing -> goLiterals fTensor remainingLiterals
+        Just (ConstantTensor (_dim : dims) c) -> return $ Evaluated $ exprToThunk $ mkExpr $ ConstantTensor dims c
+        Just xs -> do
+          fIndex <- force @expr index
+          case fIndex of
+            IIndexLiteral ci _ -> return $ Evaluated $ exprToThunk $ mkExpr (xs `at` ci)
+            _ -> return $ Unevaluable [fIndex, fTensor]
+      [] -> return $ Unevaluable [fTensor]
 
 -----------------------------------------------------------------------------
 -- Foreach

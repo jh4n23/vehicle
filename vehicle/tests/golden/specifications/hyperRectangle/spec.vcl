@@ -1,7 +1,7 @@
 --------------------------------------------------------------------------------
 -- Inputs
 
-inputSize = 2
+inputSize = 30
 
 type InputVector = Tensor Real [inputSize]
 
@@ -28,13 +28,11 @@ advises x i = forall j . j != i => classifier x ! i > classifier x ! j
 
 --------------------------------------------------------------------------------
 -- Dataset
--- @parameter(infer=True)
+@parameter(infer=True)
 n : Nat
-n = 1
 
--- @dataset
+@dataset
 inputs : Tensor Real [n, inputSize]
-inputs = foreach i j . 0
 
 minList : Tensor Real [n] -> Real
 minList v = reduceMin v
