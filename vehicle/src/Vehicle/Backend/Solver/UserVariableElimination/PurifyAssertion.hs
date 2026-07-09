@@ -75,11 +75,11 @@ purifyRatTensorExpr actions@UnblockingActions {..} incrDims value = do
     VIfRatTensor args -> unblockIf (recPurify incrDims) args
     VMinRatTensor args -> recPurify incrDims =<< purifyMinMax True args
     VMaxRatTensor args -> recPurify incrDims =<< purifyMinMax False args
-    VReduceAddRatTensor args -> unblockReduceTensor (recPurify incrDims) (recPurify (incrDims + 1)) (forceEval evalReduceAddRatTensor) args
-    VReduceMulRatTensor args -> unblockReduceTensor (recPurify incrDims) (recPurify (incrDims + 1)) (forceEval evalReduceMulRatTensor) args
-    VReduceMinRatTensor args -> unblockReduceTensor (recPurify incrDims) (recPurify (incrDims + 1)) (forceEval evalReduceMinRatTensor) args
-    VReduceMaxRatTensor args -> unblockReduceTensor (recPurify incrDims) (recPurify (incrDims + 1)) (forceEval evalReduceMaxRatTensor) args
-    VRatAtTensor args -> unblockAtTensor (recPurify incrDims) (recPurify (incrDims + 1)) (unblockIndexValue actions) args
+    VReduceAddRatTensor args -> unblockReduceTensor (recPurify (incrDims + 1)) (forceEval evalReduceAddRatTensor) args
+    VReduceMulRatTensor args -> unblockReduceTensor (recPurify (incrDims + 1)) (forceEval evalReduceMulRatTensor) args
+    VReduceMinRatTensor args -> unblockReduceTensor (recPurify (incrDims + 1)) (forceEval evalReduceMinRatTensor) args
+    VReduceMaxRatTensor args -> unblockReduceTensor (recPurify (incrDims + 1)) (forceEval evalReduceMaxRatTensor) args
+    VRatAtTensor args -> unblockAtTensor (recPurify (incrDims + 1)) (unblockIndexValue actions) args
     VRatForeach args -> unblockForeachTensor (recPurify incrDims) args
     VRatTensorBoundVar v
       | incrDims == 0 -> return $ IfLeaf $ Forced $ VBoundVar v []

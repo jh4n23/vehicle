@@ -107,11 +107,11 @@ unblockBoolTensorValue actions value = showEntry value $ do
     VBoolTensorCompareRatPointwise (op, args) -> unblockTensorOp2 (unblockRatTensorValue actions) (evalCompareRatTensorPointwise op) args
     -- Recursively unblock
     VBoolTensorIf args -> unblockIf unblock args
-    VBoolTensorReduceAnd args -> unblockReduceTensor unblock unblock (forceEval evalReduceAndTensor) args
-    VBoolTensorReduceOr args -> unblockReduceTensor unblock unblock (forceEval evalReduceOrTensor) args
+    VBoolTensorReduceAnd args -> unblockReduceTensor unblock (forceEval evalReduceAndTensor) args
+    VBoolTensorReduceOr args -> unblockReduceTensor unblock (forceEval evalReduceOrTensor) args
     VBoolTensorCompareIndex (op, args) -> unblockIndexOp2 (unblockIndexValue actions) (evalCompareIndex op) args
     VBoolTensorCompareNat (op, args) -> unblockOp2 unblockNatValue (evalCompareNat op) args
-    VBoolTensorTensorAt args -> unblockAtTensor unblock unblock (unblockIndexValue actions) args
+    VBoolTensorTensorAt args -> unblockAtTensor unblock (unblockIndexValue actions) args
     VBoolTensorVectorAt args -> unblockAtVector unblock (unblockIndexValue actions) args
     VBoolTensorForeach args -> unblockForeachTensor unblock args
   where
@@ -139,16 +139,16 @@ unblockRatTensorValue actions@UnblockingActions {..} expr =
       VMulRatTensor args -> unblockTensorOp2 unblock evalMulRatTensor args
       VDivRatTensor args -> unblockTensorOp2 unblock evalDivRatTensor args
       VPowRatTensor args -> unblockTensorOp2 unblock evalPowRatTensor args
-      VReduceAddRatTensor args -> unblockReduceTensor unblock unblock (forceEval evalReduceAddRatTensor) args
-      VReduceMulRatTensor args -> unblockReduceTensor unblock unblock (forceEval evalReduceMulRatTensor) args
-      VReduceMinRatTensor args -> unblockReduceTensor unblock unblock (forceEval evalReduceMinRatTensor) args
-      VReduceMaxRatTensor args -> unblockReduceTensor unblock unblock (forceEval evalReduceMaxRatTensor) args
+      VReduceAddRatTensor args -> unblockReduceTensor unblock (forceEval evalReduceAddRatTensor) args
+      VReduceMulRatTensor args -> unblockReduceTensor unblock (forceEval evalReduceMulRatTensor) args
+      VReduceMinRatTensor args -> unblockReduceTensor unblock (forceEval evalReduceMinRatTensor) args
+      VReduceMaxRatTensor args -> unblockReduceTensor unblock (forceEval evalReduceMaxRatTensor) args
       VMinRatTensor args -> unblockMinRatTensor unblock args
       VMaxRatTensor args -> unblockMaxRatTensor unblock args
       VRatTensorBoundVar v -> unblock =<< unblockRatTensorBoundVar v
       VNetworkApplication n args -> unblockNetworkApp unblock (unblockRecordValue actions) n args
       VParameterOrDataset ident -> unblock =<< unblockDatasetOrParameter ident
-      VRatAtTensor args -> unblockAtTensor unblock unblock (unblockIndexValue actions) args
+      VRatAtTensor args -> unblockAtTensor unblock (unblockIndexValue actions) args
       VRatAtVector args -> unblockAtVector (unblockVectorValue actions) (unblockIndexValue actions) args
       VRatForeach args -> unblockForeachTensor unblock args
       VRatTensorRecordAcc typ value fieldName args -> unblockRecordAcc actions typ value fieldName args
@@ -280,13 +280,12 @@ unblockTensorOp2 unblock evalFn (TensorOp2Args ds xs ys) = do
 unblockReduceTensor ::
   (MonadUnblock m) =>
   TypeUnblockingFunction (Thunk Builtin) m ->
-  TypeUnblockingFunction (Thunk Builtin) m ->
   (TensorReductionArgs (Thunk Builtin) -> m (Thunk Builtin)) ->
   OperationUnblockingFunction TensorReductionArgs (Thunk Builtin) m
-unblockReduceTensor unblock unblockArg evalFn (TensorReductionArgs ds xs) = do
-  maybeRewritten <- rewriteTensor xs
+unblockReduceTensor unblockArg evalFn args@(TensorReductionArgs ds xs) = do
+  maybeRewritten <- rewriteReduceAndTensor args
   case maybeRewritten of
-    Evaluated result -> unblock result
+    Evaluated result -> return $ IfLeaf result
     Unevaluable {} -> do
       xs' <- unblockArg xs
       forIfTreeM xs' $ \xs'' ->
@@ -297,12 +296,11 @@ unblockAtTensor ::
   (MonadUnblock m) =>
   TypeUnblockingFunction (Thunk Builtin) m ->
   TypeUnblockingFunction (Thunk Builtin) m ->
-  TypeUnblockingFunction (Thunk Builtin) m ->
   OperationUnblockingFunction AtTensorArgs (Thunk Builtin) m
-unblockAtTensor unblock unblockTensor unblockIndex args@(AtTensorArgs tElem d ds xs i) = do
+unblockAtTensor unblockTensor unblockIndex args@(AtTensorArgs tElem d ds xs i) = do
   maybeRewritten <- rewriteAtTensor args
   case maybeRewritten of
-    Evaluated rewritten -> unblock rewritten
+    Evaluated rewritten -> return $ IfLeaf rewritten
     Unevaluable {} -> do
       xs' <- unblockTensor xs
       i' <- unblockIndex i

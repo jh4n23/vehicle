@@ -1,24 +1,48 @@
-module Vehicle.Compile.Normalise.RewriteRules where
+module Vehicle.Compile.Normalise.RewriteRules
+  ( rewriteReduceAndTensor,
+    rewriteForeachTensor,
+    rewriteAtTensor,
+  )
+where
 
 import Control.Applicative ((<|>))
 import Control.Monad.Trans.Maybe (MaybeT (..))
-import Control.Monad.Writer (WriterT)
 import Data.Foldable (asum)
 import Vehicle.Compile.Normalise.BuiltinForced
 import Vehicle.Compile.Normalise.Core
 import Vehicle.Compile.Normalise.NBEForced
 import Vehicle.Compile.Normalise.Quote (Quote (..))
 import Vehicle.Compile.Prelude
+import Vehicle.Compile.Print (prettyFriendly)
+import Vehicle.Data.Builtin.Core.BasicOperations (ComparisonOp (..))
 import Vehicle.Data.Builtin.Interface
 import Vehicle.Data.Builtin.Interface.Print (PrintableBuiltin)
+import Vehicle.Data.Builtin.Standard.Core (ComparisonOp)
 import Vehicle.Data.Code.ForcedValue
 import Vehicle.Data.Code.Interface
 import Vehicle.Data.Tensor
 import Vehicle.Data.Variable.Bound.Context.Name
 
+type MonadRewrite builtin m =
+  ( MonadNorm builtin m,
+    MonadNameContext m,
+    NormalisableBuiltin builtin,
+    BuiltinHasNatType builtin,
+    BuiltinHasIndexLiterals builtin,
+    BuiltinHasRatLiterals builtin,
+    BuiltinHasForeach builtin,
+    BuiltinHasTensors builtin,
+    BuiltinHasListLiterals builtin,
+    BuiltinHasNatLiterals builtin,
+    BuiltinHasBoolLiterals builtin,
+    HasTensorLiterals ForcedValue builtin,
+    HasLiftableTensorOperations ForcedValue Thunk builtin,
+    BuiltinHasRatType builtin
+  )
+
 rewriteTensor ::
   forall builtin m.
-  (MonadNorm builtin m, MonadNameContext m, HasTensorExpr ForcedValue Thunk builtin, BuiltinHasBoolLiterals builtin, HasTensorLiterals ForcedValue builtin, HasLiftableTensorOperations ForcedValue Thunk builtin, BuiltinHasForeach builtin) =>
+  (MonadRewrite builtin m) =>
   Thunk builtin ->
   m (BuiltinEvaluationResult ForcedValue Thunk builtin)
 rewriteTensor value = do
@@ -27,32 +51,114 @@ rewriteTensor value = do
     (getExpr accessAtTensor -> Just args) -> rewriteAtTensor args
     (getExpr accessForeachTensor -> Just args) -> rewriteForeachTensor args
     (getExpr accessReduceAnd -> Just args) -> rewriteReduceAndTensor args
+    (getExpr accessReduceOr -> Just args) -> rewriteReduceOrTensor args
+    (getExpr accessReduceMinRat -> Just args) -> rewriteReduceMinTensor args
+    (getExpr accessReduceMaxRat -> Just args) -> rewriteReduceMaxTensor args
+    (getExpr accessReduceAddRat -> Just args) -> rewriteReduceAddTensor args
+    (getExpr accessReduceMulRat -> Just args) -> rewriteReduceMulTensor args
     _ -> return $ Unevaluable []
 
 -----------------------------------------------------------------------------
 -- ReduceAnd
 
+rewriteReduceTensor ::
+  forall m builtin b.
+  (MonadRewrite builtin m) =>
+  Doc b ->
+  TensorOp2Accessor ForcedValue Thunk builtin ->
+  EvalSimple ForcedValue Thunk TensorReductionArgs builtin m ->
+  Maybe ((ComparisonOp, TensorOp2Args (Thunk builtin)) -> m (BuiltinEvaluationResult ForcedValue Thunk builtin)) ->
+  EvalSimple ForcedValue Thunk TensorReductionArgs builtin m
+rewriteReduceTensor opName accessBop evalReductionOp rewriteComparison (TensorReductionArgs dims t) = do
+  maybeResult <- rewriteTensor t
+  case maybeResult of
+    Evaluated t' -> go t'
+    Unevaluable {} -> go t
+  where
+    go :: Thunk builtin -> m (BuiltinEvaluationResult ForcedValue Thunk builtin)
+    go tensor = logRewrite opName tensor $ do
+      forcedTensor <- force tensor
+      case forcedTensor of
+        (getExpr accessBop -> Just (TensorOp2Args ds xs ys)) -> do
+          xs' <- goRec xs
+          ys' <- goRec ys
+          return $
+            Evaluated $
+              exprToThunk $
+                mkExpr accessBop $
+                  TensorOp2Args
+                    { tensorOp2Dims = ds,
+                      tensorOp2Arg1 = xs',
+                      tensorOp2Arg2 = ys'
+                    }
+        (getExpr accessCompareRatTensorPointwise -> Just args) ->
+          case rewriteComparison of
+            Nothing -> return $ Unevaluable []
+            Just rewrite -> rewrite args
+        _ -> do
+          evalReductionOp (TensorReductionArgs dims (exprToThunk forcedTensor))
+
+    goRec :: Thunk builtin -> m (Thunk builtin)
+    goRec tensor = do
+      maybeResult <- go tensor
+      case maybeResult of
+        Evaluated result -> return result
+        Unevaluable {} ->
+          return $
+            Forced $
+              mkExpr accessReduceAnd $
+                TensorReductionArgs
+                  { tensorReductionDims = dims,
+                    tensorReductionTensor = tensor
+                  }
+
 rewriteReduceAndTensor ::
   forall m builtin.
-  (MonadNormBuiltin m, NormalisableBuiltin builtin, BuiltinHasNatType builtin, BuiltinHasIndexLiterals builtin, BuiltinHasForeach builtin, BuiltinHasTensors builtin, BuiltinHasListLiterals builtin, BuiltinHasNatLiterals builtin, BuiltinHasBoolLiterals builtin, HasTensorLiterals ForcedValue builtin, HasLiftableTensorOperations ForcedValue Thunk builtin) =>
+  (MonadRewrite builtin m) =>
   EvalSimple ForcedValue Thunk TensorReductionArgs builtin m
-rewriteReduceAndTensor (TensorReductionArgs dims tensor) =
-  go tensor
+rewriteReduceAndTensor = rewriteReduceTensor "reduceAnd" accessAndTensor evalReduceAndTensor (Just rewritePointwiseComparison)
   where
-    go :: Thunk builtin -> WriterT Bool m (Thunk builtin)
-    go value = logRewrite "reduceAnd" value $ do
-      forcedValue <- force value
-      case forcedValue of
-        (getExpr accessAndTensor -> Just (TensorOp2Args ds xs ys)) -> do
-          let xs' = exprToThunk $ mkExpr accessReduceAnd (TensorReductionArgs dims xs)
-          let ys' = exprToThunk $ mkExpr accessReduceAnd (TensorReductionArgs dims ys)
-          return $ Evaluated $ exprToThunk $ mkExpr accessAndTensor (TensorOp2Args ds xs' ys')
-        (getExpr accessCompareRatTensorPointwise -> Just (op, TensorOp2Args ds xs ys)) -> do
+    rewritePointwiseComparison :: (ComparisonOp, TensorOp2Args (Thunk builtin)) -> m (BuiltinEvaluationResult ForcedValue Thunk builtin)
+    rewritePointwiseComparison (op, TensorOp2Args ds xs ys)
+      | op == Ne = return $ Unevaluable []
+      | otherwise = do
           forcedDims <- force ds
-          return $ case forcedDims of
-            IDimCons fd fds -> Evaluated $ exprToThunk $ mkExpr accessCompareRatTensorReduced (op, TensorReduceComparisonArgs fd fds xs ys)
-            _ -> Unevaluable []
-        _ -> evalReduceAndTensor (TensorReductionArgs dims (exprToThunk forcedTensor))
+          case forcedDims of
+            IDimCons fd fds -> do
+              let args =
+                    TensorReduceComparisonArgs
+                      { tensorReduceOp2Dim = fd,
+                        tensorReduceOp2Dims = fds,
+                        tensorReduceOp2Arg1 = xs,
+                        tensorReduceOp2Arg2 = ys
+                      }
+              return $ Evaluated $ Forced $ mkExpr accessCompareRatTensorReduced (op, args)
+            _ -> return $ Unevaluable []
+
+rewriteReduceOrTensor ::
+  (MonadRewrite builtin m) =>
+  EvalSimple ForcedValue Thunk TensorReductionArgs builtin m
+rewriteReduceOrTensor = rewriteReduceTensor "reduceOr" accessOrTensor evalReduceOrTensor Nothing
+
+rewriteReduceMinTensor ::
+  (MonadRewrite builtin m) =>
+  EvalSimple ForcedValue Thunk TensorReductionArgs builtin m
+rewriteReduceMinTensor = rewriteReduceTensor "reduceMin" accessMinRatTensor evalReduceMinRatTensor Nothing
+
+rewriteReduceMaxTensor ::
+  (MonadRewrite builtin m) =>
+  EvalSimple ForcedValue Thunk TensorReductionArgs builtin m
+rewriteReduceMaxTensor = rewriteReduceTensor "reduceMax" accessMaxRatTensor evalReduceMaxRatTensor Nothing
+
+rewriteReduceAddTensor ::
+  (MonadRewrite builtin m) =>
+  EvalSimple ForcedValue Thunk TensorReductionArgs builtin m
+rewriteReduceAddTensor = rewriteReduceTensor "reduceAdd" accessAddRatTensor evalReduceAddRatTensor Nothing
+
+rewriteReduceMulTensor ::
+  (MonadRewrite builtin m) =>
+  EvalSimple ForcedValue Thunk TensorReductionArgs builtin m
+rewriteReduceMulTensor = rewriteReduceTensor "reduceMul" accessMulRatTensor evalReduceMulRatTensor Nothing
 
 -----------------------------------------------------------------------------
 -- At
@@ -63,23 +169,31 @@ rewriteReduceAndTensor (TensorReductionArgs dims tensor) =
 --    `(xs + ys) ! i` becomes `xs ! i + ys ! i`.
 --    `(foreach j . f j) ! i` becomes `f i`
 rewriteAtTensor ::
-  forall expr thunk builtin m.
-  (MonadNormBuiltin m, PrintableBuiltin builtin, HasTensorLiterals expr builtin, HasLiftableTensorOperations expr thunk builtin, BuiltinHasListLiterals builtin, BuiltinHasIndexLiterals builtin, HasTensorExpr expr thunk builtin, BuiltinHasForeach builtin) =>
-  EvalSimple expr thunk AtTensorArgs builtin m
-rewriteAtTensor args@(AtTensorArgs t d ds tensor index) = do
-  forcedTensor <- force tensor
-  let maybeResult =
-        goOp1 forcedTensor liftableTensorOp1s
-          <|> goOp2 forcedTensor liftableTensorOp2s
-          <|> goForeach forcedTensor
-  case maybeResult of
-    Nothing -> evalAtTensor args
-    Just result -> Evaluated . exprToThunk <$> result
+  forall builtin m.
+  (MonadRewrite builtin m) =>
+  EvalSimple ForcedValue Thunk AtTensorArgs builtin m
+rewriteAtTensor args@(AtTensorArgs tElem d ds t index) = go t
   where
-    recEvalAt :: thunk builtin -> m (thunk builtin)
-    recEvalAt ys = forceEvaluation accessAtTensor rewriteAtTensor (AtTensorArgs t d ds ys index)
+    go :: Thunk builtin -> m (BuiltinEvaluationResult ForcedValue Thunk builtin)
+    go value = logRewrite "at" value $ do
+      maybeRewrittenBody <- rewriteTensor value
+      forcedTensor <- case maybeRewrittenBody of
+        Unevaluable {} -> forceThunk value
+        Evaluated rewrittenBody -> forceThunk rewrittenBody
+      let maybeResult =
+            goOp1 forcedTensor liftableTensorOp1s
+              <|> goOp2 forcedTensor liftableTensorOp2s
+              <|> goForeach forcedTensor
+      case maybeResult of
+        Nothing -> evalAtTensor args
+        Just result -> Evaluated . exprToThunk <$> result
 
-    goOp1 :: expr builtin -> [TensorOpEvalData expr thunk TensorOp1Args builtin] -> Maybe (m (expr builtin))
+    recEvalAt :: Thunk builtin -> m (Thunk builtin)
+    recEvalAt ys =
+      forceEvaluation accessAtTensor rewriteAtTensor $
+        AtTensorArgs tElem d ds ys index
+
+    goOp1 :: ForcedValue builtin -> [TensorOpEvalData ForcedValue Thunk TensorOp1Args builtin] -> Maybe (m (ForcedValue builtin))
     goOp1 forcedTensor = \case
       (accessOp1, _) : remainingOp1s -> case getExpr accessOp1 forcedTensor of
         Just (TensorOp1Args _ xs) -> Just $ do
@@ -88,7 +202,7 @@ rewriteAtTensor args@(AtTensorArgs t d ds tensor index) = do
         _ -> goOp1 forcedTensor remainingOp1s
       [] -> Nothing
 
-    goOp2 :: expr builtin -> [TensorOpEvalData expr thunk TensorOp2Args builtin] -> Maybe (m (expr builtin))
+    goOp2 :: ForcedValue builtin -> [TensorOpEvalData ForcedValue Thunk TensorOp2Args builtin] -> Maybe (m (ForcedValue builtin))
     goOp2 forcedTensor = \case
       (accessOp2, _) : remainingOps2 -> case getExpr accessOp2 forcedTensor of
         Just (TensorOp2Args _ xs ys) -> Just $ do
@@ -98,7 +212,7 @@ rewriteAtTensor args@(AtTensorArgs t d ds tensor index) = do
         _ -> goOp2 forcedTensor remainingOps2
       _ -> Nothing
 
-    goForeach :: expr builtin -> Maybe (m (expr builtin))
+    goForeach :: ForcedValue builtin -> Maybe (m (ForcedValue builtin))
     goForeach forcedTensor = case getExpr accessForeachTensor forcedTensor of
       Just (ForeachTensorArgs _ _ _ fn) -> Just $ do
         forceApp fn [explicit index]
@@ -112,53 +226,57 @@ rewriteAtTensor args@(AtTensorArgs t d ds tensor index) = do
 -- For example `foreach i . xs ! i + ys ! i` becomes `xs + ys`.
 rewriteForeachTensor ::
   forall builtin m.
-  (MonadNormBuiltin m, MonadNameContext m, HasBuiltinConstructor ForcedValue Thunk, NormalisableExpr ForcedValue Thunk builtin m, HasTensorLiterals ForcedValue builtin, HasLiftableTensorOperations ForcedValue Thunk builtin, HasLambdaConstructor ForcedValue Thunk Closure, HasOptimisedAtBuiltins builtin) =>
+  (MonadRewrite builtin m) =>
   EvalSimple ForcedValue Thunk ForeachTensorArgs builtin m
-rewriteForeachTensor args@(ForeachTensorArgs _t d ds fn) =
+rewriteForeachTensor (ForeachTensorArgs _t d ds fn) =
   case getExpr accessForcedLamC fn of
     Just (binder, closure) -> do
       ctx <- getNameContext
       let lv = boundCtxLv ctx
       let body = extendClosureWithBound closure binder lv
-      body' <- addNameToContext binder $ force body
 
       let createForeachArgs tElem newBody = do
             let newBody' = quote mempty (lv + 1) newBody
             let newLam = mkExpr accessForcedLamC (binder, Closure (namedBoundContextToEnv ctx) newBody')
             ForeachTensorArgs tElem d ds newLam
 
-      maybeResult <- liftForeach createForeachArgs lv d (exprToThunk body')
-      case maybeResult of
-        Just liftedResult -> return $ Evaluated liftedResult
-        Nothing -> evalForeachTensor args
+      addNameToContext binder $ do
+        maybeRewrittenBody <- rewriteTensor body
+        body' <- case maybeRewrittenBody of
+          Unevaluable {} -> Forced <$> forceThunk body
+          Evaluated rewrittenBody -> return rewrittenBody
+        liftForeach ctx createForeachArgs lv d body'
     _ -> unexpectedExprError "NBE" "foreachIndex"
 
 liftForeach ::
   forall builtin m.
-  (MonadNormBuiltin m, NormalisableExpr ForcedValue Thunk builtin m, HasTensorLiterals ForcedValue builtin, HasBuiltinConstructor ForcedValue Thunk, HasLiftableTensorOperations ForcedValue Thunk builtin, HasOptimisedAtBuiltins builtin, HasLambdaConstructor ForcedValue Thunk Closure) =>
+  (MonadRewrite builtin m) =>
+  NamedBoundCtx ->
   (Thunk builtin -> Thunk builtin -> ForeachTensorArgs (Thunk builtin)) ->
   Lv ->
   Thunk builtin ->
   Thunk builtin ->
-  m (Maybe (Thunk builtin))
-liftForeach createForeachArgs lv dim = go
+  m (BuiltinEvaluationResult ForcedValue Thunk builtin)
+liftForeach outputCtx createForeachArgs lv dim = go
   where
     go ::
       Thunk builtin ->
-      m (Maybe (Thunk builtin))
-    go body = logRewrite "foreach" body $ do
+      m (BuiltinEvaluationResult ForcedValue Thunk builtin)
+    go body = logForeachRewrite outputCtx createForeachArgs "foreach" body $ do
       forcedBody <- force body
       -- Try each of the following in turn until it works.
-      runMaybeT $
-        asum $
-          map
-            MaybeT
-            [ goOp1 forcedBody liftableTensorOp1s,
-              goOp2 forcedBody liftableTensorOp2s,
-              goConst forcedBody,
-              goLiterals forcedBody tensorLiterals,
-              goAt forcedBody
-            ]
+      maybeResult <-
+        runMaybeT $
+          asum $
+            map
+              MaybeT
+              [ goOp1 forcedBody liftableTensorOp1s,
+                goOp2 forcedBody liftableTensorOp2s,
+                goConst forcedBody,
+                goLiterals forcedBody tensorLiterals,
+                goAt forcedBody
+              ]
+      return $ maybe (Unevaluable []) Evaluated maybeResult
 
     goRec ::
       ForcedValue builtin ->
@@ -167,10 +285,8 @@ liftForeach createForeachArgs lv dim = go
     goRec typ body = do
       maybeLiftedResult <- go body
       case maybeLiftedResult of
-        Just liftedResult -> return liftedResult
-        Nothing -> do
-          let args = createForeachArgs (exprToThunk typ) body
-          forceEvaluation accessForeachTensor evalForeachTensor args
+        Evaluated liftedResult -> return liftedResult
+        Unevaluable {} -> forceEvaluation accessForeachTensor evalForeachTensor (createForeachArgs (Forced typ) body)
 
     -- Distribute the `forallIndex` across a liftable operation (e.g. `not`).
     -- e.g. `foreach i . op (x(i))` -> `op (foreach i . x(i))`
@@ -293,15 +409,15 @@ fusionExit ctx result = do
   return result-}
 
 logRewrite ::
-  (MonadNormBuiltin m) =>
+  (MonadNormBuiltin m, PrintableBuiltin builtin) =>
   Doc b ->
   Thunk builtin ->
-  m (Thunk builtin) ->
-  m (Thunk builtin)
+  m (BuiltinEvaluationResult expr Thunk builtin) ->
+  m (BuiltinEvaluationResult expr Thunk builtin)
 logRewrite op input outputFn = do
   logDebugM MaxDetail $ do
     inputDoc <- prettyFriendlyInCtx input
-    return $ "rewrite-" <+> op <+> "-enter:" <+> inputDoc
+    return $ "rewrite-" <> op <> "-enter:" <+> inputDoc
   incrCallDepth
 
   output <- outputFn
@@ -309,8 +425,34 @@ logRewrite op input outputFn = do
   decrCallDepth
   logDebugM MaxDetail $ do
     outputDoc <- case output of
-      Nothing -> ""
-      Just result -> _
-    return $ "rewrite-" <+> op <+> "-exit:" <+> _
+      Unevaluable {} -> return ""
+      Evaluated result -> prettyFriendlyInCtx result
+    return $ "rewrite-" <> op <> "-exit:" <+> outputDoc
+
+  return output
+
+logForeachRewrite ::
+  (MonadNormBuiltin m, HasRatType ForcedValue Thunk builtin, BuiltinHasForeach builtin, PrintableBuiltin builtin) =>
+  NamedBoundCtx ->
+  (Thunk builtin -> Thunk builtin -> ForeachTensorArgs (Thunk builtin)) ->
+  Doc b ->
+  Thunk builtin ->
+  m (BuiltinEvaluationResult ForcedValue Thunk builtin) ->
+  m (BuiltinEvaluationResult ForcedValue Thunk builtin)
+logForeachRewrite outputCtx createForeachArgs op input outputFn = do
+  logDebugM MaxDetail $ do
+    let expr = mkExpr accessForeachTensor (createForeachArgs (Forced IRatType) input)
+    let inputDoc = prettyFriendly (WithContext expr outputCtx)
+    return $ "rewrite-" <> op <> "-enter:" <+> inputDoc
+  incrCallDepth
+
+  output <- outputFn
+
+  decrCallDepth
+  logDebugM MaxDetail $ do
+    outputDoc <- case output of
+      Unevaluable {} -> return ""
+      Evaluated result -> return $ prettyFriendly (WithContext result outputCtx)
+    return $ "rewrite-" <> op <> "-exit:" <+> outputDoc
 
   return output
